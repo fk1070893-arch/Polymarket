@@ -16,10 +16,13 @@ permissions:
   pages: write
   id-token: write
 
-# Une seule publication à la fois ; les suivantes attendent leur tour
-# (sinon, avec une exécution toutes les 5 min, aucune n'irait au bout).
+# Une seule publication automatique à la fois ; les suivantes attendent
+# leur tour (sinon, avec une exécution toutes les 5 min, aucune n'irait au
+# bout). Les lancements manuels ont leur propre file : GitHub ne garde
+# qu'une exécution en attente par file, et un passage automatique
+# remplacerait sinon un recalcul demandé à la main.
 concurrency:
-  group: pages
+  group: pages-${{ github.event_name == 'workflow_dispatch' && 'manuel' || 'auto' }}
   cancel-in-progress: false
 
 jobs:
