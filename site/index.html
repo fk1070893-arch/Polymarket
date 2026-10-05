@@ -25,6 +25,7 @@
         <a href="#" data-view="markets" class="view-tab">Marchés</a>
         <a href="#alertes" data-view="alerts" class="view-tab">Alertes <span class="badge" id="alerts-badge" hidden></span></a>
         <a href="#crypto" data-view="crypto" class="view-tab">Modèle crypto</a>
+        <a href="#backtest" data-view="backtest" class="view-tab">Backtest</a>
         <a href="#portefeuille" data-view="portfolio" class="view-tab">Mon portefeuille</a>
       </nav>
     </header>
@@ -100,6 +101,17 @@
         </p>
       </section>
       <section id="crypto-body" aria-live="polite"></section>
+    </main>
+
+    <main class="wrap" id="view-backtest" data-view-panel="backtest" hidden>
+      <section class="intro">
+        <h1>Backtest</h1>
+        <p>
+          On rejoue le passé : des centaines de marchés déjà terminés, avec les prix d'avant leur fin, pour voir
+          ce qui aurait marché. C'est le seul moyen de savoir si une stratégie a un vrai avantage ou si c'est de la chance.
+        </p>
+      </section>
+      <section id="backtest-body" aria-live="polite"></section>
     </main>
 
     <main class="wrap" id="view-portfolio" data-view-panel="portfolio" hidden>

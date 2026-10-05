@@ -1,4 +1,4 @@
-import { loadAlerts, loadCrypto, loadEvents, loadHistory, loadMarketStates } from "./api.js";
+import { loadAlerts, loadBacktest, loadCrypto, loadEvents, loadHistory, loadMarketStates } from "./api.js";
 import { mainMarket, yesPrice } from "./normalize.js";
 import { lineChart, sparkline } from "./chart.js";
 import {
@@ -21,10 +21,11 @@ import { buy, loadPortfolio, settle } from "./portfolio.js";
 import { renderAlerts, alertsForEvent, alertMiniList } from "./view-alerts.js";
 import { renderPortfolio } from "./view-portfolio.js";
 import { cryptoForMarket, renderCrypto } from "./view-crypto.js";
+import { renderBacktest } from "./view-backtest.js";
 
 const PAGE = 24;
 const LIVE_REFRESH_MS = 2 * 60 * 1000;
-const VIEWS = { "": "markets", alertes: "alerts", crypto: "crypto", portefeuille: "portfolio" };
+const VIEWS = { "": "markets", alertes: "alerts", crypto: "crypto", backtest: "backtest", portefeuille: "portfolio" };
 
 const state = {
   view: "markets",
@@ -41,6 +42,7 @@ const state = {
   alertsUpdatedAt: null,
   alertsError: false,
   portfolio: loadPortfolio(),
+  backtest: null, // résultats du backtest (null = pas encore chargé, false = indisponible)
   crypto: null, // modèle crypto (null = pas encore chargé, false = indisponible)
   marketStates: {}, // prix / résultats des marchés hors liste (portefeuille)
 };
@@ -355,6 +357,8 @@ function renderView() {
     renderAlerts(ctx);
   } else if (state.view === "crypto") {
     renderCrypto(ctx);
+  } else if (state.view === "backtest") {
+    renderBacktest(ctx);
   } else {
     renderPortfolio(ctx);
   }
@@ -724,6 +728,18 @@ function restoreTheme() {
 
 // ---------- Chargement ----------
 
+// Le backtest ne change qu'une fois par jour : on ne le recharge pas à chaque fois
+let backtestLoadedAt = 0;
+async function refreshBacktest() {
+  if (Date.now() - backtestLoadedAt < 30 * 60 * 1000 && state.backtest) return;
+  try {
+    state.backtest = await loadBacktest();
+    backtestLoadedAt = Date.now();
+  } catch {
+    state.backtest ??= false;
+  }
+}
+
 async function refreshCrypto() {
   try {
     state.crypto = await loadCrypto();
@@ -770,6 +786,7 @@ async function refresh({ initial = false } = {}) {
       loadEvents({ preferLive: initial || state.source === "live" }),
       refreshAlerts(),
       refreshCrypto(),
+      refreshBacktest(),
     ]);
     Object.assign(state, data);
     mergeCryptoEvents();
