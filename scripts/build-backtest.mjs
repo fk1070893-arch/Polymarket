@@ -18,7 +18,7 @@
 
 import { CLOB, GAMMA } from "../site/js/api.js";
 import { normalizeMarket, winnerIndex } from "../site/js/normalize.js";
-import { brier, calibration, followSignals, groupOf, parseTime } from "./backtest-lib.mjs";
+import { VOLUME_BUCKETS, brier, calibration, followSignals, groupOf, hashId, parseTime, volumeBucket } from "./backtest-lib.mjs";
 import { modelProbability, parseCryptoQuestion } from "./crypto-model.mjs";
 import { getJSON, loadPrevious, mapLimit, writeData } from "./lib.mjs";
 
@@ -28,9 +28,9 @@ const HOUR = 3600000;
 const LOOKBACK = 24 * HOUR; // on se place 24 h avant la fin
 const MONTHS = 6; // profondeur de l'étude de calibration
 const CRYPTO_MONTHS = 4;
-const MAX_CALIB = 2500;
-const MAX_CRYPTO = 2500;
-const MIN_VOLUME = 5000;
+const MAX_PER_BUCKET = 700; // marchés par tranche de volume (calibration)
+const MAX_CRYPTO_PER_BUCKET = 700;
+const MIN_VOLUME = 1000; // en dessous, le prix ne veut plus dire grand-chose
 const REFRESH_EVERY = 24 * HOUR;
 const TIME_BUDGET = 12 * 60 * 1000; // on s'arrête proprement au bout de 12 min
 
@@ -41,7 +41,7 @@ const NOISE = /\bup or down\b/i;
 // ---------- Marchés terminés ----------
 
 // Événements terminés, mois par mois, triés par volume
-async function closedEvents({ months, pagesPerMonth, tag }) {
+async function closedEvents({ months, pagesPerMonth, tag, extra = {} }) {
   const out = new Map();
   const now = Date.now();
   for (let m = 0; m < months; m++) {
@@ -58,6 +58,7 @@ async function closedEvents({ months, pagesPerMonth, tag }) {
         offset: String(page * 100),
       });
       if (tag) params.set("tag_slug", tag);
+      for (const [k, v] of Object.entries(extra)) params.set(k, String(v));
       const batch = await getJSON(`${GAMMA}/events?${params}`).catch((err) => {
         console.log(`Événements terminés indisponibles (${err.message})`);
         return [];
@@ -97,6 +98,7 @@ function closedMarkets(rawEvents) {
         ref,
         end: end ?? ref,
         volume: m.volume,
+        bucket: volumeBucket(m.volume),
       });
     }
   }
@@ -107,7 +109,8 @@ function closedMarkets(rawEvents) {
 async function priceAt(tokenId, ts) {
   const params = new URLSearchParams({
     market: tokenId,
-    startTs: String(Math.floor((ts - 6 * HOUR) / 1000)),
+    // Fenêtre large : sur un petit marché, le dernier échange peut dater
+    startTs: String(Math.floor((ts - 48 * HOUR) / 1000)),
     endTs: String(Math.floor(ts / 1000)),
     fidelity: "10",
   });
@@ -116,8 +119,19 @@ async function priceAt(tokenId, ts) {
   return pts.length ? Number(pts[pts.length - 1].p) : null;
 }
 
-async function withPrices(markets, limit) {
-  const list = markets.sort((a, b) => b.volume - a.volume).slice(0, limit);
+// Au plus `perBucket` marchés par tranche de volume, tirés au hasard (de
+// façon reproductible) pour ne pas favoriser les plus gros.
+function sampleByBucket(markets, perBucket) {
+  const key = (m) => hashId(`${m.id}:tirage`);
+  const out = [];
+  for (const b of VOLUME_BUCKETS) {
+    const inBucket = markets.filter((m) => m.bucket === b.key).sort((x, y) => key(x) - key(y));
+    out.push(...inBucket.slice(0, perBucket));
+  }
+  return out;
+}
+
+async function withPrices(list) {
   let done = 0;
   await mapLimit(list, 8, async (m) => {
     if (outOfTime()) return;
@@ -130,10 +144,19 @@ async function withPrices(markets, limit) {
 // ---------- Étude 1 : calibration ----------
 
 async function calibrationStudy() {
-  const events = await closedEvents({ months: MONTHS, pagesPerMonth: 3 });
+  // Les plus gros événements, puis une requête par tranche de volume pour
+  // avoir aussi des petits marchés
+  const all = new Map();
+  for (const ev of await closedEvents({ months: MONTHS, pagesPerMonth: 3 })) all.set(String(ev.id), ev);
+  for (const b of VOLUME_BUCKETS) {
+    const extra = { volume_min: b.min, ...(b.max < Infinity ? { volume_max: b.max } : {}) };
+    for (const ev of await closedEvents({ months: MONTHS, pagesPerMonth: 2, extra })) all.set(String(ev.id), ev);
+  }
+  const events = [...all.values()];
   const markets = closedMarkets(events).filter((m) => m.volume >= MIN_VOLUME);
-  console.log(`Calibration : ${events.length} événements, ${markets.length} marchés exploitables`);
-  const samples = await withPrices(markets, MAX_CALIB);
+  const counts = VOLUME_BUCKETS.map((b) => `${b.key}: ${markets.filter((m) => m.bucket === b.key).length}`).join(", ");
+  console.log(`Calibration : ${events.length} événements, ${markets.length} marchés exploitables (${counts})`);
+  const samples = await withPrices(sampleByBucket(markets, MAX_PER_BUCKET));
   console.log(`Calibration : ${samples.length} marchés avec un prix 24 h avant`);
 
   const byGroup = {};
@@ -141,7 +164,12 @@ async function calibrationStudy() {
     const s = samples.filter((x) => x.group === g);
     if (s.length >= 30) byGroup[g] = { n: s.length, brier: brier(s), bins: calibration(s) };
   }
-  return { n: samples.length, brier: brier(samples), bins: calibration(samples), byGroup };
+  const byVolume = {};
+  for (const b of VOLUME_BUCKETS) {
+    const s = samples.filter((x) => x.bucket === b.key);
+    if (s.length >= 30) byVolume[b.key] = { n: s.length, brier: brier(s), bins: calibration(s) };
+  }
+  return { n: samples.length, brier: brier(samples), bins: calibration(samples), byGroup, byVolume };
 }
 
 // ---------- Étude 2 : modèle crypto rejoué ----------
@@ -196,7 +224,7 @@ async function cryptoStudy() {
   }
   console.log(`Crypto : ${events.length} événements, ${parsed.length} marchés de prix BTC/ETH`);
 
-  const priced = await withPrices(parsed, MAX_CRYPTO);
+  const priced = await withPrices(sampleByBucket(parsed.filter((m) => m.volume >= MIN_VOLUME), MAX_CRYPTO_PER_BUCKET));
   const samples = [];
   for (const m of priced) {
     const t0 = m.ref - LOOKBACK;
@@ -209,7 +237,7 @@ async function cryptoStudy() {
     // Échéance du marché vue depuis t0 (la date prévue, pas la clôture réelle)
     const model = modelProbability(m.q, { spot: s, vol: () => v / 100, dateMs: m.end, nowMs: t0 });
     if (model == null || !Number.isFinite(model)) continue;
-    samples.push({ id: m.id, kind: m.q.kind, asset: m.q.asset, p: m.p, model, outcome: m.outcome });
+    samples.push({ id: m.id, kind: m.q.kind, asset: m.q.asset, bucket: m.bucket, p: m.p, model, outcome: m.outcome });
   }
   console.log(`Crypto : ${samples.length} marchés rejoués`);
 
@@ -218,6 +246,12 @@ async function cryptoStudy() {
     const s = samples.filter((x) => x.kind === k);
     if (s.length >= 10)
       byKind[k] = { n: s.length, brierModel: brier(s, "model"), brierPoly: brier(s, "p"), signals: followSignals(s, 0.05) };
+  }
+  const byVolume = {};
+  for (const b of VOLUME_BUCKETS) {
+    const s = samples.filter((x) => x.bucket === b.key);
+    if (s.length >= 10)
+      byVolume[b.key] = { n: s.length, brierModel: brier(s, "model"), brierPoly: brier(s, "p"), signals: followSignals(s, 0.05) };
   }
   const thresholds = {};
   for (const t of [0.03, 0.05, 0.1, 0.15]) thresholds[t] = followSignals(samples, t);
@@ -230,6 +264,7 @@ async function cryptoStudy() {
     polyBins: calibration(samples),
     thresholds,
     byKind,
+    byVolume,
   };
 }
 
@@ -247,10 +282,13 @@ function logSummary(calib, crypto) {
       .join("\n");
   console.log(`\n=== Calibration (${calib.n} marchés, Brier ${calib.brier?.toFixed(3)}) ===\n${rows(calib.bins)}`);
   for (const [g, r] of Object.entries(calib.byGroup)) console.log(`--- ${g} (${r.n}, Brier ${r.brier.toFixed(3)}) ---\n${rows(r.bins)}`);
+  for (const [g, r] of Object.entries(calib.byVolume ?? {})) console.log(`--- volume ${g} (${r.n}, Brier ${r.brier.toFixed(3)}) ---\n${rows(r.bins)}`);
   if (crypto?.n) {
     console.log(`\n=== Modèle crypto (${crypto.n} marchés) Brier modèle ${crypto.brierModel.toFixed(3)} / Polymarket ${crypto.brierPoly.toFixed(3)} ===`);
     for (const [t, r] of Object.entries(crypto.thresholds))
       console.log(`  écart ≥ ${Math.round(t * 100)} pts : ${r.all.bets} paris, ${r.all.wins} gagnés, gain/pari ${p(r.all.roi)} (A ${p(r.A.roi)} / B ${p(r.B.roi)})`);
+    for (const [k, r] of Object.entries(crypto.byVolume ?? {}))
+      console.log(`  volume ${k} : n=${r.n} Brier modèle ${r.brierModel.toFixed(3)} / Polymarket ${r.brierPoly.toFixed(3)}, signaux ${r.signals.all.bets}, gain/pari ${p(r.signals.all.roi)}`);
     for (const [k, r] of Object.entries(crypto.byKind))
       console.log(`  ${k} : n=${r.n} Brier modèle ${r.brierModel.toFixed(3)} / Polymarket ${r.brierPoly.toFixed(3)}, signaux ${r.signals.all.bets}, gain/pari ${p(r.signals.all.roi)}`);
   }

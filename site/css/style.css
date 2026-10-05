@@ -1230,6 +1230,19 @@ button {
   margin-left: 4px;
 }
 
+.alert-market {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 2px 0 0;
+}
+
+.flag.small {
+  background: rgba(245, 165, 36, 0.16);
+  color: #b26f08;
+}
+
 .reasons {
   display: flex;
   flex-wrap: wrap;
@@ -1666,6 +1679,14 @@ button {
 
 #view-backtest .verdict {
   margin-top: 16px;
+}
+
+.chips-label {
+  align-self: center;
+  flex: none;
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-right: 2px;
 }
 
 .calib-layout {

@@ -13,7 +13,7 @@ Site web en **lecture seule** pour consulter les marchés de [Polymarket](https:
 
 ### Alertes : paris suspects
 
-L'onglet **Alertes** liste les gros paris (≥ 2 000 $) qui ressemblent à ceux d'un initié. Chaque pari reçoit un score sur 100 :
+L'onglet **Alertes** liste les paris qui ressemblent à ceux d'un initié : ceux de 2 000 $ et plus, et dès 300 $ sur les **petits marchés** (liquidité < 25 000 $ ou volume < 50 000 $), où un pari modeste peut déjà faire bouger le prix. Chaque pari reçoit un score sur 100 :
 
 | Signal | Points |
 | --- | --- |
@@ -23,6 +23,7 @@ L'onglet **Alertes** liste les gros paris (≥ 2 000 $) qui ressemblent à ceux 
 | Mise ≥ 50 000 $ / ≥ 10 000 $ / ≥ 5 000 $ | 20 / 12 / 6 |
 | D'autres wallets récents ont misé pareil en moins de 2 h | 10 à 15 |
 | Pari placé moins de 7 jours avant l'échéance | 5 |
+| Mise ≥ 50 % / ≥ 20 % / ≥ 10 % de la liquidité du marché | 25 / 15 / 8 |
 
 Seuls les paris à 35 points ou plus sont gardés (7 jours d'historique). Pour chaque alerte, le site montre aussi l'évolution du prix depuis le pari : c'est le meilleur moyen de voir si ces wallets avaient vraiment une info. Un score élevé n'est **pas une preuve** de délit d'initié.
 
@@ -36,8 +37,8 @@ Le site fige aussi, pour chaque marché, les deux probabilités 24 h avant l'éc
 
 L'onglet **Backtest** rejoue le passé, une fois par jour (ou à la demande : *Actions → Publier le site → Run workflow → Recalculer le backtest*) :
 
-1. **Calibration de Polymarket** sur ~2 500 marchés terminés des 6 derniers mois : pour chaque tranche de prix la veille de la fin (5-10 %, 10-20 %…), la fréquence réelle de l'issue et le gain qu'aurait donné l'achat systématique de « Oui » ou de « Non », par catégorie.
-2. **Modèle crypto rejoué** sur les marchés BTC/ETH terminés des 4 derniers mois, avec le prix Deribit et l'indice de volatilité DVOL de l'époque.
+1. **Calibration de Polymarket** sur ~2 800 marchés terminés des 6 derniers mois, tirés à parts égales dans quatre tranches de volume (< 10 k$, 10-100 k$, 100 k$-1 M$, > 1 M$) pour ne pas ignorer les petits marchés : pour chaque tranche de prix la veille de la fin (5-10 %, 10-20 %…), la fréquence réelle de l'issue et le gain qu'aurait donné l'achat systématique de « Oui » ou de « Non », par catégorie et par taille de marché.
+2. **Modèle crypto rejoué** sur les marchés BTC/ETH terminés des 4 derniers mois, avec le prix Deribit et l'indice de volatilité DVOL de l'époque, avec un détail par taille de marché.
 
 Tous les prix sont pris 24 h avant la fin (aucune information future), et chaque résultat est recalculé sur deux moitiés tirées au sort : un effet qui n'apparaît que dans une moitié est traité comme du hasard.
 

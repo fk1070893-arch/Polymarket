@@ -7,7 +7,10 @@ const KIND_LABELS = { above: "Au-dessus de X à une date", below: "Sous X à une
 const MIN_N = 30; // en dessous, un résultat n'est pas affiché comme fiable
 const MIN_ROI = 0.05;
 
-const filter = { group: "all" };
+const VOLUME_LABELS = { "<10k": "Moins de 10 k$", "10k-100k": "10 k$ – 100 k$", "100k-1M": "100 k$ – 1 M$", ">1M": "Plus de 1 M$" };
+
+// Un seul segment à la fois : une catégorie OU une tranche de volume
+const filter = { group: "all", volume: "all" };
 let bound = false;
 const $ = (id) => document.getElementById(id);
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -186,6 +189,31 @@ function cryptoSection(c) {
         </tbody>
       </table>
     </div>
+    ${
+      Object.keys(c.byVolume ?? {}).length
+        ? `<h3>Par taille de marché (volume total)</h3>
+    <div class="table-wrap">
+      <table class="bt-table">
+        <thead><tr><th>Volume</th><th class="num">Marchés</th><th class="num">Brier modèle</th><th class="num">Brier Polymarket</th><th class="num">Signaux 5 pts</th><th class="num">Gain / pari</th></tr></thead>
+        <tbody>
+          ${Object.entries(c.byVolume)
+            .map(
+              ([k, r]) => `
+            <tr class="${r.n < MIN_N ? "thin" : ""}">
+              <td>${esc(VOLUME_LABELS[k] ?? k)}</td>
+              <td class="num">${r.n}</td>
+              <td class="num ${r.brierModel < r.brierPoly ? "up" : ""}">${r.brierModel.toFixed(3)}</td>
+              <td class="num ${r.brierPoly <= r.brierModel ? "up" : ""}">${r.brierPoly.toFixed(3)}</td>
+              <td class="num">${r.signals.all.bets}</td>
+              ${roiCell(r.signals.all.roi)}
+            </tr>`
+            )
+            .join("")}
+        </tbody>
+      </table>
+    </div>`
+        : ""
+    }
     <h3>Par type de marché</h3>
     <div class="table-wrap">
       <table class="bt-table">
@@ -214,8 +242,14 @@ function bind(ctx) {
   bound = true;
   $("backtest-body").addEventListener("click", (e) => {
     const chip = e.target.closest("[data-bt-group]");
-    if (!chip) return;
-    filter.group = chip.dataset.btGroup;
+    const vchip = e.target.closest("[data-bt-volume]");
+    if (chip) {
+      filter.group = chip.dataset.btGroup;
+      filter.volume = "all";
+    } else if (vchip) {
+      filter.volume = vchip.dataset.btVolume;
+      filter.group = "all";
+    } else return;
     renderBacktest(ctx);
   });
 }
@@ -236,7 +270,10 @@ export function renderBacktest(ctx) {
   const cal = data.calibration;
   const groups = ["all", ...Object.keys(cal.byGroup ?? {})];
   if (!groups.includes(filter.group)) filter.group = "all";
-  const cur = filter.group === "all" ? cal : cal.byGroup[filter.group];
+  const volumes = Object.keys(cal.byVolume ?? {});
+  if (filter.volume !== "all" && !volumes.includes(filter.volume)) filter.volume = "all";
+  const cur =
+    filter.volume !== "all" ? cal.byVolume[filter.volume] : filter.group === "all" ? cal : cal.byGroup[filter.group];
   const found = findings(cur.bins);
 
   body.innerHTML = `
@@ -253,12 +290,27 @@ export function renderBacktest(ctx) {
         ${groups
           .map(
             (g) =>
-              `<button type="button" class="chip${g === filter.group ? " active" : ""}" data-bt-group="${g}" aria-pressed="${g === filter.group}">${
+              `<button type="button" class="chip${g === filter.group && filter.volume === "all" ? " active" : ""}" data-bt-group="${g}" aria-pressed="${g === filter.group && filter.volume === "all"}">${
                 GROUP_LABELS[g] ?? g
               } <span class="count">${g === "all" ? cal.n : cal.byGroup[g].n}</span></button>`
           )
           .join("")}
       </nav>
+      ${
+        volumes.length
+          ? `<nav class="chips" aria-label="Volume du marché">
+              <span class="chips-label">Volume du marché</span>
+              ${volumes
+                .map(
+                  (v) =>
+                    `<button type="button" class="chip${v === filter.volume ? " active" : ""}" data-bt-volume="${esc(v)}" aria-pressed="${v === filter.volume}">${
+                      VOLUME_LABELS[v] ?? esc(v)
+                    } <span class="count">${cal.byVolume[v].n}</span></button>`
+                )
+                .join("")}
+            </nav>`
+          : ""
+      }
       <div class="calib-layout">
         <div class="chart-box calib-box" id="calib-chart"></div>
         <div class="calib-findings">
@@ -286,6 +338,7 @@ export function renderBacktest(ctx) {
         <li><b>Deux moitiés :</b> les marchés sont répartis au hasard en A et B. Un effet qui n'existe que dans une moitié est probablement de la chance.</li>
         <li><b>Le passé n'est pas l'avenir :</b> un biais connu finit souvent par disparaître quand d'autres l'exploitent.</li>
         <li><b>Frais et liquidité :</b> les gains sont calculés au prix affiché ; en vrai, l'écart achat-vente et la taille des mises les réduisent.</li>
+        <li><b>Petits marchés :</b> c'est là que les prix se trompent le plus souvent, mais aussi là où l'écart achat-vente est le plus large et où le dernier prix peut dater de plusieurs heures. Un gain affiché sur la tranche « moins de 10 k$ » est le plus dur à obtenir en vrai : on ne peut y miser que de petites sommes sans faire bouger le prix.</li>
         <li><b>Modèle crypto simplifié :</b> le backtest utilise la volatilité DVOL (à la monnaie, 30 jours), sans le « sourire » de volatilité utilisé en direct.</li>
       </ul>
     </section>`;

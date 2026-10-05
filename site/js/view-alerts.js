@@ -11,7 +11,7 @@ const GROUPS = [
   { key: "autre", label: "Autres" },
 ];
 
-const filter = { min: 50, sort: "recent", group: "all" };
+const filter = { min: 50, sort: "recent", group: "all", size: "all" };
 let bound = false;
 
 const $ = (id) => document.getElementById(id);
@@ -44,6 +44,13 @@ function walletLine(a) {
   return `<span class="who" title="${esc(a.wallet)}">${who}</span>${bits.length ? ` · ${bits.join(" · ")}` : ""}`;
 }
 
+function marketLine(a) {
+  if (a.marketLiquidity == null && a.marketVolume == null) return "";
+  const k = (v) => (v == null ? "?" : usd0.format(v));
+  return `<p class="alert-market">${a.small ? '<span class="flag small">Petit marché</span>' : ""}
+    <span class="muted small">Liquidité ${k(a.marketLiquidity)} · volume total ${k(a.marketVolume)}</span></p>`;
+}
+
 function moveLine(a, now) {
   if (now == null) return `<span class="muted">Marché clôturé ou hors liste</span>`;
   return `Aujourd'hui : <b>${pct(now)}</b> ${changeBadge(now - a.price) || '<span class="chg">=</span>'}`;
@@ -64,6 +71,7 @@ function alertCard(ctx, a) {
           <span class="muted">· ${timeAgo(a.ts * 1000)}</span>
         </p>
         <p class="alert-move">${moveLine(a, now)}</p>
+        ${marketLine(a)}
         <div class="reasons">${a.reasons.map((r) => `<span>${esc(r)}</span>`).join("")}</div>
         <footer>
           <span class="wallet">${walletLine(a)}</span>
@@ -98,6 +106,10 @@ function bind(ctx) {
     filter.min = Number(e.target.value);
     renderAlerts(ctx);
   });
+  $("alerts-size").addEventListener("change", (e) => {
+    filter.size = e.target.value;
+    renderAlerts(ctx);
+  });
   $("alerts-sort").addEventListener("change", (e) => {
     filter.sort = e.target.value;
     renderAlerts(ctx);
@@ -124,8 +136,9 @@ export function renderAlerts(ctx) {
 
   const all = state.alerts ?? [];
   const counts = Object.fromEntries(GROUPS.map((g) => [g.key, 0]));
+  const sizeOk = (a) => filter.size === "all" || (filter.size === "small" ? a.small === true : !a.small);
   for (const a of all) {
-    if (a.score < filter.min) continue;
+    if (a.score < filter.min || !sizeOk(a)) continue;
     counts.all++;
     counts[groupOf(a)]++;
   }
@@ -145,7 +158,7 @@ export function renderAlerts(ctx) {
     return;
   }
 
-  let shown = all.filter((a) => a.score >= filter.min && (filter.group === "all" || groupOf(a) === filter.group));
+  let shown = all.filter((a) => a.score >= filter.min && sizeOk(a) && (filter.group === "all" || groupOf(a) === filter.group));
   const move = (a) => {
     const { now } = liveInfo(ctx, a);
     return now == null ? -Infinity : now - a.price;

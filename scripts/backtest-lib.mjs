@@ -9,6 +9,18 @@ export const GROUPS = [
   { key: "eco", label: "Économie / Tech", tags: ["economy", "business", "finance", "fed", "tech", "ai", "stocks"] },
 ];
 
+// Tranches de volume total échangé sur un marché
+export const VOLUME_BUCKETS = [
+  { key: "<10k", label: "Moins de 10 k$", min: 0, max: 10000 },
+  { key: "10k-100k", label: "10 k$ à 100 k$", min: 10000, max: 100000 },
+  { key: "100k-1M", label: "100 k$ à 1 M$", min: 100000, max: 1000000 },
+  { key: ">1M", label: "Plus de 1 M$", min: 1000000, max: Infinity },
+];
+
+export function volumeBucket(volume) {
+  return (VOLUME_BUCKETS.find((b) => volume >= b.min && volume < b.max) ?? VOLUME_BUCKETS[0]).key;
+}
+
 export function groupOf(tagSlugs) {
   for (const g of GROUPS) if (tagSlugs.some((t) => g.tags.includes(t))) return g.key;
   return "autre";
@@ -23,11 +35,16 @@ export function parseTime(v) {
   return Number.isFinite(t) ? t : null;
 }
 
-// Répartition stable en deux moitiés (A/B) à partir de l'identifiant
-export function half(id) {
+// Empreinte numérique stable d'un identifiant (FNV-1a)
+export function hashId(id) {
   let h = 2166136261;
   for (const c of String(id)) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
-  return (h >>> 0) % 2 === 0 ? "A" : "B";
+  return h >>> 0;
+}
+
+// Répartition stable en deux moitiés (A/B) à partir de l'identifiant
+export function half(id) {
+  return hashId(id) % 2 === 0 ? "A" : "B";
 }
 
 // Gain pour 1 $ misé sur "Oui" (ou "Non") au prix p

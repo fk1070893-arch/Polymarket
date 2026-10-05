@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { brier, calibration, followSignals, groupOf, half, parseTime, roiNo, roiYes } from "./backtest-lib.mjs";
+import { brier, calibration, followSignals, groupOf, half, parseTime, roiNo, roiYes, volumeBucket } from "./backtest-lib.mjs";
 
 test("lecture des dates de l'API", () => {
   assert.equal(parseTime("2025-10-03 12:00:00+00"), Date.UTC(2025, 9, 3, 12));
@@ -60,4 +60,11 @@ test("catégories", () => {
   assert.equal(groupOf(["politics", "france"]), "politique");
   assert.equal(groupOf(["bitcoin"]), "crypto");
   assert.equal(groupOf(["weird"]), "autre");
+});
+
+test("tranches de volume", () => {
+  assert.equal(volumeBucket(1500), "<10k");
+  assert.equal(volumeBucket(10000), "10k-100k");
+  assert.equal(volumeBucket(250000), "100k-1M");
+  assert.equal(volumeBucket(5e6), ">1M");
 });

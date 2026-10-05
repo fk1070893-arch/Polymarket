@@ -63,9 +63,11 @@
       <section class="intro">
         <h1>Paris suspects</h1>
         <p>
-          Gros paris (2 000 $ et plus) qui ressemblent à ceux d'un initié : wallet tout neuf, mise sur une issue
-          improbable, plusieurs wallets qui misent pareil en même temps… Le score va de 0 à 100. Un score élevé
-          n'est <strong>pas une preuve</strong> : c'est un signal à creuser.
+          Paris qui ressemblent à ceux d'un initié : wallet tout neuf, mise sur une issue improbable, plusieurs
+          wallets qui misent pareil en même temps, mise énorme pour la taille du marché… On regarde les paris de
+          2 000 $ et plus, et dès 300 $ sur les petits marchés (peu de liquidité ou de volume), où un pari modeste
+          peut déjà tout faire bouger. Le score va de 0 à 100. Un score élevé n'est <strong>pas une preuve</strong> :
+          c'est un signal à creuser.
         </p>
       </section>
       <section class="controls" aria-label="Filtres des alertes">
@@ -75,6 +77,14 @@
             <option value="35">35+ (tout)</option>
             <option value="50" selected>50+</option>
             <option value="70">70+ (très suspect)</option>
+          </select>
+        </label>
+        <label class="sort">
+          <span>Taille du marché</span>
+          <select id="alerts-size">
+            <option value="all">Tous</option>
+            <option value="small">Petits marchés</option>
+            <option value="big">Gros marchés</option>
           </select>
         </label>
         <label class="sort">

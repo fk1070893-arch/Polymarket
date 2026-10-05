@@ -2,7 +2,10 @@
 //
 // Tous les paris Polymarket sont publics. Ce script récupère les gros paris
 // récents, regarde qui les a passés (âge du wallet, nombre de marchés déjà
-// joués) et attribue un score de suspicion à chacun. Résultat :
+// joués), la taille du pari par rapport au marché, et attribue un score de
+// suspicion à chacun. Sur les petits marchés (peu de liquidité), un pari
+// modeste en montant peut être énorme pour le marché : le seuil y est plus
+// bas. Résultat :
 // site/data/alerts.json, affiché dans l'onglet « Alertes » du site.
 //
 // Usage : node scripts/build-alerts.mjs (après build-snapshot.mjs)
@@ -11,7 +14,15 @@ import { getJSON, loadPrevious, mapLimit, nowSec, readData, writeData } from "./
 
 const DATA_API = "https://data-api.polymarket.com";
 
-const MIN_CASH = 2000; // on ne regarde que les paris d'au moins 2 000 $
+import { GAMMA } from "../site/js/api.js";
+
+const MIN_CASH = 2000; // seuil des paris sur les marchés normaux
+const MIN_CASH_SMALL = 300; // seuil sur les petits marchés
+// Un "petit marché" : peu de liquidité OU peu de volume échangé
+const SMALL_LIQUIDITY = 25000;
+const SMALL_VOLUME = 50000;
+const MARKET_TTL = 3600; // infos d'un marché réutilisées pendant 1 h
+const MAX_WALLETS_PER_RUN = 200;
 const MAX_PAGES = 10;
 const PAGE_SIZE = 500;
 const MIN_SCORE = 35; // en dessous, le pari n'est pas considéré comme suspect
@@ -26,9 +37,32 @@ const DAY = 86400;
 // aucun intérêt pour la détection d'insiders.
 const NOISE = /\bup or down\b/i;
 
-function scoreTrade(t, wallet, clusterSize, endDate) {
+const fmtK = (v) => (v >= 1000 ? `${Math.round(v / 1000)} k$` : `${Math.round(v)} $`);
+
+function isSmallMarket(info) {
+  if (!info) return false;
+  return (info.liq != null && info.liq < SMALL_LIQUIDITY) || (info.vol != null && info.vol < SMALL_VOLUME);
+}
+
+function scoreTrade(t, wallet, clusterSize, endDate, market) {
   let score = 0;
   const reasons = [];
+
+  // Poids du pari dans le marché : 5 000 $ sur un marché qui n'a que
+  // 10 000 $ de liquidité, c'est un pari de quelqu'un très sûr de lui.
+  if (market?.liq > 0) {
+    const impact = t.cash / market.liq;
+    if (impact >= 0.5) {
+      score += 25;
+      reasons.push(`Mise énorme pour ce marché (${Math.round(impact * 100)} % de sa liquidité de ${fmtK(market.liq)})`);
+    } else if (impact >= 0.2) {
+      score += 15;
+      reasons.push(`Grosse mise pour ce marché (${Math.round(impact * 100)} % de sa liquidité)`);
+    } else if (impact >= 0.1) {
+      score += 8;
+      reasons.push(`Mise importante pour ce marché (${Math.round(impact * 100)} % de sa liquidité)`);
+    }
+  }
 
   const age = wallet.first ? t.ts - wallet.first : null;
   if (age !== null) {
@@ -102,7 +136,7 @@ async function fetchRecentTrades(since) {
       offset: String(page * PAGE_SIZE),
       takerOnly: "true",
       filterType: "CASH",
-      filterAmount: String(MIN_CASH),
+      filterAmount: String(MIN_CASH_SMALL),
     });
     const batch = await getJSON(`${DATA_API}/trades?${params}`);
     if (!Array.isArray(batch) || batch.length === 0) break;
@@ -123,6 +157,56 @@ async function walletInfo(address) {
   return { first, traded: count, checked: nowSec() };
 }
 
+// Liquidité et volume de marchés, par conditionId (cache d'une heure)
+async function marketInfos(conditionIds, cache, events) {
+  const now = nowSec();
+  const fromSnapshot = new Map();
+  for (const ev of events) {
+    for (const m of ev.markets) {
+      if (m.conditionId) fromSnapshot.set(m.conditionId, { liq: ev.liquidity, vol: m.volume, checked: now });
+    }
+  }
+  const missing = [];
+  for (const id of conditionIds) {
+    if (cache[id] && now - cache[id].checked < MARKET_TTL) continue;
+    if (fromSnapshot.has(id)) cache[id] = fromSnapshot.get(id);
+    else missing.push(id);
+  }
+  for (let i = 0; i < missing.length; i += 40) {
+    const batch = missing.slice(i, i + 40);
+    const qs = batch.map((id) => `condition_ids=${encodeURIComponent(id)}`).join("&");
+    const rows = await getJSON(`${GAMMA}/markets?${qs}&limit=${batch.length}`, 2).catch(() => []);
+    for (const r of rows) {
+      const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
+      if (r.conditionId)
+        cache[r.conditionId] = { liq: num(r.liquidityNum ?? r.liquidity), vol: num(r.volumeNum ?? r.volume), checked: now };
+    }
+  }
+  return cache;
+}
+
+// Événements absents de l'instantané (petits marchés) : catégories et
+// échéance récupérées à part (cache de 6 h).
+async function eventInfos(slugs, cache) {
+  const now = nowSec();
+  const todo = slugs.filter((s) => !cache[s] || now - cache[s].checked > 6 * 3600).slice(0, 80);
+  await mapLimit(todo, 4, async (slug) => {
+    const rows = await getJSON(`${GAMMA}/events?slug=${encodeURIComponent(slug)}`, 2).catch(() => []);
+    const ev = rows[0];
+    cache[slug] = ev
+      ? {
+          id: String(ev.id),
+          slug,
+          title: ev.title ?? "",
+          endDate: ev.endDate ?? null,
+          tags: (ev.tags ?? []).filter((t) => t?.slug).map((t) => ({ slug: t.slug })),
+          checked: now,
+        }
+      : { checked: now, missing: true };
+  });
+  return cache;
+}
+
 async function main(prev) {
   const now = nowSec();
   const since = Math.max((prev.lastTs ?? 0) - 600, now - DAY);
@@ -132,7 +216,7 @@ async function main(prev) {
   const eventBySlug = new Map(events.map((ev) => [ev.slug, ev]));
 
   const rawTrades = await fetchRecentTrades(since);
-  console.log(`${rawTrades.length} gros paris récupérés depuis ${new Date(since * 1000).toISOString()}`);
+  console.log(`${rawTrades.length} paris récupérés depuis ${new Date(since * 1000).toISOString()}`);
 
   const known = new Set(prev.alerts.map((a) => a.id));
   const trades = [];
@@ -143,7 +227,7 @@ async function main(prev) {
     const cash = price * size;
     const id = `${t.transactionHash}:${t.asset}:${t.proxyWallet}`;
     if (!t.proxyWallet || !Number.isFinite(ts) || ts < since || known.has(id)) continue;
-    if (t.side !== "BUY" || !(price > 0) || price > 0.85 || cash < MIN_CASH) continue;
+    if (t.side !== "BUY" || !(price > 0) || price > 0.85 || cash < MIN_CASH_SMALL) continue;
     if (NOISE.test(t.title ?? "")) continue;
     known.add(id);
     trades.push({
@@ -162,12 +246,22 @@ async function main(prev) {
       tx: t.transactionHash ?? "",
     });
   }
-  console.log(`${trades.length} nouveaux paris à analyser`);
+
+  // Taille des marchés concernés ; les paris de moins de 2 000 $ ne sont
+  // gardés que sur les petits marchés.
+  const marketCache = { ...prev.markets };
+  for (const [id, info] of Object.entries(marketCache)) if (now - info.checked > MARKET_TTL) delete marketCache[id];
+  await marketInfos([...new Set(trades.map((t) => t.conditionId).filter(Boolean))], marketCache, events);
+  const kept = trades.filter((t) => t.cash >= MIN_CASH || isSmallMarket(marketCache[t.conditionId]));
+  console.log(`${trades.length} paris de 300 $ et plus, ${kept.length} à analyser (dont ${kept.filter((t) => t.cash < MIN_CASH).length} sur de petits marchés)`);
+  trades.length = 0;
+  trades.push(...kept);
 
   const wallets = { ...prev.wallets };
-  const toFetch = [...new Set(trades.map((t) => t.wallet))].filter(
-    (w) => !wallets[w] || now - wallets[w].checked > WALLET_TTL
-  );
+  // Les plus gros paris d'abord si on doit limiter les appels
+  const toFetch = [...new Set([...trades].sort((a, b) => b.cash - a.cash).map((t) => t.wallet))]
+    .filter((w) => !wallets[w] || now - wallets[w].checked > WALLET_TTL)
+    .slice(0, MAX_WALLETS_PER_RUN);
   await mapLimit(toFetch, 4, async (w) => {
     wallets[w] = await walletInfo(w);
   });
@@ -181,6 +275,10 @@ async function main(prev) {
   // Paris récents (nouveaux + alertes déjà connues) pour repérer les groupes
   // de wallets qui misent la même chose au même moment.
   const recent = [...trades, ...prev.alerts.filter((a) => a.walletAge != null && a.walletAge < 7 * DAY)];
+
+  const eventCache = { ...prev.events };
+  for (const [k, v] of Object.entries(eventCache)) if (now - v.checked > 6 * 3600) delete eventCache[k];
+  await eventInfos([...new Set(trades.map((t) => t.eventSlug).filter((s) => s && !eventBySlug.has(s)))], eventCache);
 
   const fresh = [];
   for (const t of trades) {
@@ -197,9 +295,11 @@ async function main(prev) {
         .map((o) => o.wallet)
     ).size;
 
-    const ev = eventBySlug.get(t.eventSlug);
+    const cached = eventCache[t.eventSlug];
+    const ev = eventBySlug.get(t.eventSlug) ?? (cached && !cached.missing ? cached : null);
     const w = wallets[t.wallet] ?? {};
-    const { score, reasons } = scoreTrade(t, w, cluster, ev?.endDate);
+    const market = marketCache[t.conditionId];
+    const { score, reasons } = scoreTrade(t, w, cluster, ev?.endDate, market);
     if (score < MIN_SCORE) continue;
 
     fresh.push({
@@ -209,8 +309,12 @@ async function main(prev) {
       walletAge: w.first ? t.ts - w.first : null,
       walletMarkets: w.traded ?? null,
       eventTitle: ev?.title ?? "",
-      eventId: ev?.id ?? "",
+      // Identifiant seulement si l'événement est dans la liste du site
+      eventId: eventBySlug.has(t.eventSlug) ? ev.id : "",
       tags: ev ? ev.tags.map((tag) => tag.slug) : [],
+      marketLiquidity: market?.liq ?? null,
+      marketVolume: market?.vol ?? null,
+      small: isSmallMarket(market),
     });
   }
   console.log(`${fresh.length} nouvelles alertes`);
@@ -225,12 +329,14 @@ async function main(prev) {
   }
 
   const lastTs = Math.max(prev.lastTs ?? 0, ...trades.map((t) => t.ts));
-  return { updatedAt: new Date().toISOString(), lastTs, alerts, wallets };
+  return { updatedAt: new Date().toISOString(), lastTs, alerts, wallets, markets: marketCache, events: eventCache };
 }
 
 const prev = (await loadPrevious("alerts.json")) ?? {};
 prev.alerts ??= [];
 prev.wallets ??= {};
+prev.markets ??= {};
+prev.events ??= {};
 
 try {
   await writeData("alerts.json", await main(prev));
