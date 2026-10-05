@@ -17,10 +17,10 @@ Site web en **lecture seule** pour consulter les marchés de [Polymarket](https:
 navigateur ──► API Polymarket (direct)          ✔ badge « En direct »
      │
      └─ si injoignable ──► data/events.json      ✔ badge « Instantané »
-                           (généré toutes les 30 min par la GitHub Action)
+                           (généré toutes les 5 min par la GitHub Action)
 ```
 
-Si ta connexion bloque les domaines Polymarket, le site affiche automatiquement le dernier instantané récupéré par GitHub (au maximum 30 minutes de retard).
+Si ta connexion bloque les domaines Polymarket, le site affiche automatiquement le dernier instantané récupéré par GitHub (en général moins de 15 minutes de retard : GitHub lance parfois les tâches planifiées en retard).
 
 ## Mise en ligne (GitHub Pages)
 
@@ -28,7 +28,7 @@ Si ta connexion bloque les domaines Polymarket, le site affiche automatiquement 
 2. Dans **Settings → Pages**, choisir **Source : GitHub Actions**.
 3. Lancer une première fois **Actions → Publier le site → Run workflow**.
 
-Le site est ensuite disponible sur `https://<ton-pseudo>.github.io/Polymarket/` et se met à jour tout seul toutes les 30 minutes.
+Le site est ensuite disponible sur `https://<ton-pseudo>.github.io/Polymarket/` et se met à jour tout seul toutes les 5 minutes.
 
 > GitHub Pages est gratuit pour les dépôts **publics**. Pour un dépôt privé, il faut un compte GitHub Pro.
 
@@ -49,6 +49,6 @@ npm start          # sert le dossier site/ sur http://localhost:3000
 | `site/js/normalize.js` | Mise en forme des données de l'API (partagée navigateur / Node) |
 | `site/js/chart.js` | Graphiques SVG sans dépendance |
 | `scripts/build-snapshot.mjs` | Génère `site/data/events.json` |
-| `.github/workflows/pages.yml` | Instantané + déploiement toutes les 30 min |
+| `.github/workflows/pages.yml` | Instantané + déploiement toutes les 5 min |
 
 Les probabilités sont les prix du marché, pas des certitudes. Données publiques de Polymarket, à titre informatif uniquement.

@@ -3,7 +3,7 @@ name: Publier le site
 on:
   push:
   schedule:
-    - cron: "*/30 * * * *" # instantané des marchés toutes les 30 minutes
+    - cron: "*/5 * * * *" # instantané des marchés toutes les 5 minutes (minimum autorisé par GitHub)
   workflow_dispatch:
 
 permissions:
