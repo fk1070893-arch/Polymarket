@@ -5,6 +5,7 @@
   "description": "Consultation en lecture seule des marchés Polymarket",
   "scripts": {
     "snapshot": "node scripts/build-snapshot.mjs",
+    "alerts": "node scripts/build-alerts.mjs",
     "start": "npx --yes serve site"
   }
 }

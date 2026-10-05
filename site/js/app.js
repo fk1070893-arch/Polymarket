@@ -1,45 +1,32 @@
-import { loadEvents, loadHistory } from "./api.js";
+import { loadAlerts, loadEvents, loadHistory, loadMarketStates } from "./api.js";
 import { mainMarket, yesPrice } from "./normalize.js";
 import { lineChart, sparkline } from "./chart.js";
+import {
+  TAG_SKIP,
+  cents,
+  changeBadge,
+  dateFmt,
+  esc,
+  money,
+  pct,
+  shortDateFmt,
+  signedMoney,
+  tagLabel,
+  timeFmt,
+  translateOutcome,
+  usd,
+  usd0,
+} from "./format.js";
+import { buy, loadPortfolio, settle } from "./portfolio.js";
+import { renderAlerts, alertsForEvent, alertMiniList } from "./view-alerts.js";
+import { renderPortfolio } from "./view-portfolio.js";
 
 const PAGE = 24;
 const LIVE_REFRESH_MS = 2 * 60 * 1000;
-
-const TAG_FR = {
-  politics: "Politique",
-  elections: "Élections",
-  "us-election": "Élections US",
-  "global-elections": "Élections monde",
-  world: "Monde",
-  geopolitics: "Géopolitique",
-  sports: "Sport",
-  soccer: "Football",
-  football: "Football",
-  nfl: "NFL",
-  nba: "NBA",
-  tennis: "Tennis",
-  crypto: "Crypto",
-  bitcoin: "Bitcoin",
-  ethereum: "Ethereum",
-  economy: "Économie",
-  business: "Business",
-  finance: "Finance",
-  tech: "Tech",
-  ai: "IA",
-  science: "Science",
-  culture: "Culture",
-  "pop-culture": "Pop culture",
-  movies: "Cinéma",
-  music: "Musique",
-  trump: "Trump",
-  france: "France",
-  weather: "Météo",
-};
-
-// Tags techniques de Polymarket qui ne servent pas de catégories
-const TAG_SKIP = new Set(["all", "featured", "recurring", "hide-from-new", "trending", "new", "breaking-news", "games"]);
+const VIEWS = { "": "markets", alertes: "alerts", portefeuille: "portfolio" };
 
 const state = {
+  view: "markets",
   events: [],
   histories: {},
   source: null,
@@ -49,6 +36,11 @@ const state = {
   sort: "volume24h",
   shown: PAGE,
   favorites: loadFavorites(),
+  alerts: null, // null = pas encore chargées
+  alertsUpdatedAt: null,
+  alertsError: false,
+  portfolio: loadPortfolio(),
+  marketStates: {}, // prix / résultats des marchés hors liste (portefeuille)
 };
 
 const $ = (id) => document.getElementById(id);
@@ -71,36 +63,15 @@ function saveFavorites() {
   }
 }
 
-const usd = new Intl.NumberFormat("fr-FR", { style: "currency", currency: "USD", notation: "compact", maximumFractionDigits: 1 });
-const usd0 = new Intl.NumberFormat("fr-FR", { style: "currency", currency: "USD", notation: "compact", maximumFractionDigits: 0 });
-const dateFmt = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "long", year: "numeric" });
-const shortDateFmt = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "short", year: "numeric" });
-const timeFmt = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-
-function pct(p) {
-  if (p > 0 && p < 0.01) return "<1 %";
-  if (p < 1 && p > 0.99) return ">99 %";
-  return `${Math.round(p * 100)} %`;
-}
-
-function changeBadge(delta) {
-  const pts = delta * 100;
-  if (Math.abs(pts) < 0.5) return "";
-  const cls = pts > 0 ? "up" : "down";
-  const sign = pts > 0 ? "▲" : "▼";
-  return `<span class="chg ${cls}">${sign} ${Math.abs(pts).toFixed(0)} pt${Math.abs(pts) >= 2 ? "s" : ""}</span>`;
-}
-
-function esc(s) {
-  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-}
-
-function translateOutcome(o) {
-  return { Yes: "Oui", No: "Non" }[o] ?? o;
-}
-
-function tagLabel(tag) {
-  return TAG_FR[tag.slug] ?? tag.label;
+let toastTimer;
+function toast(msg, kind = "") {
+  const el = $("detail").open ? $("toast") : $("toast-page");
+  for (const t of [$("toast"), $("toast-page")]) t.hidden = true;
+  el.className = `toast ${kind}`;
+  el.textContent = msg;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (el.hidden = true), 3500);
 }
 
 function daysLeft(endDate) {
@@ -128,6 +99,28 @@ function isBinary(ev) {
 
 function maxMove(ev) {
   return Math.max(0, ...ev.markets.map((m) => Math.abs(m.change24h)));
+}
+
+// Index des marchés ouverts, pour retrouver un prix rapidement
+let marketIndex = { byId: new Map(), byCondition: new Map() };
+function indexMarkets() {
+  const byId = new Map();
+  const byCondition = new Map();
+  for (const ev of state.events) {
+    for (const m of ev.markets) {
+      byId.set(m.id, { ev, m });
+      if (m.conditionId) byCondition.set(m.conditionId, { ev, m });
+    }
+  }
+  marketIndex = { byId, byCondition };
+}
+
+// Prix actuel d'une issue d'un marché (ou null si inconnu)
+function currentPrice(marketId, outcomeIndex) {
+  const hit = marketIndex.byId.get(marketId);
+  if (hit) return hit.m.prices[outcomeIndex] ?? null;
+  const st = state.marketStates[marketId];
+  return st?.p?.[outcomeIndex] ?? null;
 }
 
 // ---------- Filtres et tri ----------
@@ -188,7 +181,7 @@ function filtered() {
   return [...list].sort(by);
 }
 
-// ---------- Rendu ----------
+// ---------- Rendu : marchés ----------
 
 function renderStatus() {
   const s = $("status");
@@ -260,6 +253,8 @@ function card(ev) {
   const fav = state.favorites.has(ev.id);
   const extra = isBinary(ev) ? 0 : ev.markets.length - 3;
   const hist = state.histories[mainMarket(ev)?.tokenId];
+  const nAlerts = alertsForEvent(state, ev).length;
+  const nPos = state.portfolio.positions.filter((p) => p.status === "open" && p.eventId === ev.id).length;
   return `
     <article class="card" data-id="${esc(ev.id)}" tabindex="0" role="button" aria-label="${esc(ev.title)}">
       <header>
@@ -267,6 +262,13 @@ function card(ev) {
         <h3>${esc(ev.title)}</h3>
         <button type="button" class="fav${fav ? " on" : ""}" data-fav="${esc(ev.id)}" aria-pressed="${fav}" aria-label="${fav ? "Retirer des favoris" : "Ajouter aux favoris"}">★</button>
       </header>
+      ${
+        nAlerts || nPos
+          ? `<div class="card-flags">${nAlerts ? `<span class="flag alert">${nAlerts} alerte${nAlerts > 1 ? "s" : ""}</span>` : ""}${
+              nPos ? `<span class="flag pos">Ma prédiction</span>` : ""
+            }</div>`
+          : ""
+      }
       <div class="rows">${outcomeRows(ev, 3)}</div>
       ${extra > 0 ? `<p class="extra">+ ${extra} autre${extra > 1 ? "s" : ""} issue${extra > 1 ? "s" : ""}</p>` : ""}
       <footer>
@@ -278,6 +280,7 @@ function card(ev) {
 }
 
 function renderGrid() {
+  if (!state.source) return;
   const list = filtered();
   renderStats(list);
   const grid = $("grid");
@@ -307,14 +310,74 @@ function renderGrid() {
   more.textContent = `Afficher plus (${list.length - state.shown} restants)`;
 }
 
-function render() {
-  renderStatus();
-  renderChips();
-  renderGrid();
-}
-
 function renderSkeleton() {
   $("grid").innerHTML = Array.from({ length: 9 }, () => `<div class="card skeleton"><i></i><i></i><i></i><i></i></div>`).join("");
+}
+
+// ---------- Vues ----------
+
+const ctx = {
+  state,
+  toast,
+  currentPrice,
+  marketIndex: () => marketIndex,
+  openDetail: (id, opts) => openDetail(id, opts),
+  rerender: () => renderView(),
+};
+
+function renderAlertsBadge() {
+  const b = $("alerts-badge");
+  const since = Date.now() / 1000 - 86400;
+  const n = (state.alerts ?? []).filter((a) => a.score >= 70 && a.ts > since).length;
+  b.hidden = n === 0;
+  b.textContent = n;
+  b.title = `${n} alerte${n > 1 ? "s" : ""} très suspecte${n > 1 ? "s" : ""} ces dernières 24 h`;
+}
+
+function renderView() {
+  renderStatus();
+  renderAlertsBadge();
+  for (const tab of document.querySelectorAll(".view-tab")) {
+    const on = tab.dataset.view === state.view;
+    tab.classList.toggle("active", on);
+    if (on) tab.setAttribute("aria-current", "page");
+    else tab.removeAttribute("aria-current");
+  }
+  for (const panel of document.querySelectorAll("[data-view-panel]")) {
+    panel.hidden = panel.dataset.viewPanel !== state.view;
+  }
+  if (state.view === "markets") {
+    renderChips();
+    renderGrid();
+  } else if (state.view === "alerts") {
+    renderAlerts(ctx);
+  } else {
+    renderPortfolio(ctx);
+  }
+}
+
+function viewFromHash() {
+  const h = decodeURIComponent(location.hash.slice(1));
+  if (h in VIEWS) return { view: VIEWS[h] };
+  return { view: state.view, slug: h.replace(/^marche\//, "") };
+}
+
+function viewHash(view) {
+  const key = Object.keys(VIEWS).find((k) => VIEWS[k] === view) ?? "";
+  return key ? `#${key}` : location.pathname + location.search;
+}
+
+function onRoute() {
+  const { view, slug } = viewFromHash();
+  if (view !== state.view) {
+    state.view = view;
+    window.scrollTo({ top: 0 });
+  }
+  renderView();
+  if (slug) {
+    const ev = state.events.find((e) => e.slug === slug || e.id === slug);
+    if (ev) openDetail(ev.id, { keepHash: true });
+  }
 }
 
 // ---------- Fiche détaillée ----------
@@ -336,11 +399,56 @@ async function drawHistory(market, interval) {
       : "";
 }
 
-function openDetail(id) {
+// Panneau "prédiction fictive" pour le marché sélectionné
+function tradePanel(ev, market, pick) {
+  const cash = state.portfolio.cash;
+  const options = market.outcomes
+    .map((o, i) => {
+      const p = market.prices[i] ?? 0;
+      return `<button type="button" class="pick ${i === 0 ? "yes" : "no"}${pick === i ? " on" : ""}" data-pick="${i}" ${
+        p > 0 && p < 1 ? "" : "disabled"
+      }>${esc(translateOutcome(o))} <b>${cents(p)}</b></button>`;
+    })
+    .join("");
+  const mine = state.portfolio.positions.filter((p) => p.status === "open" && p.eventId === ev.id);
+  return `
+    <div class="trade-head">
+      <h3>Ma prédiction <span class="muted">(fictive)</span></h3>
+      <span class="muted">Solde : <b>${money.format(cash)}</b></span>
+    </div>
+    ${isBinary(ev) ? "" : `<p class="hint">Issue : <b>${esc(market.label || market.question)}</b></p>`}
+    <div class="picks">${options}</div>
+    <div class="amount">
+      <label for="trade-amount">Mise</label>
+      <div class="amount-input"><input id="trade-amount" type="number" min="1" step="1" inputmode="decimal" value="${Math.min(50, Math.floor(cash)) || ""}" /><span>$</span></div>
+      <div class="quick">${[10, 50, 100, 250].map((v) => `<button type="button" data-amount="${v}">${v}</button>`).join("")}</div>
+    </div>
+    <p class="trade-summary" id="trade-summary"></p>
+    <button type="button" class="btn primary" id="trade-go" disabled>Valider la prédiction</button>
+    ${
+      mine.length
+        ? `<div class="my-positions"><h4>Mes prédictions en cours sur ce marché</h4>${mine
+            .map((p) => {
+              const now = currentPrice(p.marketId, p.outcomeIndex);
+              const pnl = p.shares * (now ?? p.price) - p.stake;
+              return `<div class="mini-pos"><span>${esc(p.marketLabel ? `${p.marketLabel} · ` : "")}${esc(translateOutcome(p.outcome))} à ${cents(
+                p.price
+              )} · ${money.format(p.stake)}</span><span class="${pnl >= 0 ? "up" : "down"}">${signedMoney(pnl)}</span></div>`;
+            })
+            .join("")}</div>`
+        : ""
+    }`;
+}
+
+function openDetail(id, { keepHash = false, marketId = null, pick = null } = {}) {
   const ev = state.events.find((e) => e.id === id);
-  if (!ev) return;
-  let selected = mainMarket(ev);
+  if (!ev) {
+    toast("Ce marché n'est plus dans la liste des marchés ouverts.");
+    return;
+  }
+  let selected = ev.markets.find((m) => m.id === marketId) ?? mainMarket(ev);
   let interval = "1w";
+  let tradePick = pick;
   const dlg = $("detail");
 
   const tags = ev.tags
@@ -353,8 +461,8 @@ function openDetail(id) {
     ? outcomeRows(ev)
     : ev.markets
         .map(
-          (m, i) => `
-        <button type="button" class="row selectable${i === 0 ? " selected" : ""}" data-market="${esc(m.id)}">
+          (m) => `
+        <button type="button" class="row selectable${m === selected ? " selected" : ""}" data-market="${esc(m.id)}">
           <span class="row-label">${esc(m.label || m.question)}</span>
           <span class="bar"><i class="yes" style="width:${yesPrice(m) * 100}%"></i></span>
           <span class="row-val">${pct(yesPrice(m))}</span>
@@ -362,6 +470,8 @@ function openDetail(id) {
         </button>`
         )
         .join("");
+
+  const evAlerts = alertsForEvent(state, ev);
 
   $("detail-body").innerHTML = `
     <header class="detail-head">
@@ -389,9 +499,15 @@ function openDetail(id) {
       <div class="chart-box" id="detail-chart"></div>
       <p class="chart-note" id="detail-chart-note"></p>
     </section>
+    <section class="trade" id="trade"></section>
+    ${
+      evAlerts.length
+        ? `<section><h3>Paris suspects sur ce marché (${evAlerts.length})</h3>${alertMiniList(ctx, evAlerts.slice(0, 5))}</section>`
+        : ""
+    }
     <section>
       <h3>${isBinary(ev) ? "Probabilités" : `Issues (${ev.markets.length})`}</h3>
-      ${isBinary(ev) ? "" : '<p class="hint">Cliquez sur une issue pour afficher son historique.</p>'}
+      ${isBinary(ev) ? "" : '<p class="hint">Clique sur une issue pour voir son historique et faire ta prédiction.</p>'}
       <div class="rows detail-rows">${rows}</div>
     </section>
     ${ev.description ? `<section><h3>Règles de résolution</h3><p class="desc">${esc(ev.description)}</p></section>` : ""}
@@ -402,7 +518,42 @@ function openDetail(id) {
       ? `Probabilité « Oui » : ${pct(yesPrice(selected))}`
       : `${selected.label || selected.question} : ${pct(yesPrice(selected))}`;
   };
+
+  const updateSummary = () => {
+    const amount = parseFloat($("trade-amount").value);
+    const go = $("trade-go");
+    const sum = $("trade-summary");
+    go.disabled = true;
+    if (tradePick == null) {
+      sum.textContent = "Choisis une issue.";
+      return;
+    }
+    if (!(amount > 0)) {
+      sum.textContent = "Indique une mise.";
+      return;
+    }
+    if (amount > state.portfolio.cash + 1e-9) {
+      sum.innerHTML = `<span class="down">Solde fictif insuffisant (${money.format(state.portfolio.cash)}).</span>`;
+      return;
+    }
+    const shares = amount / selected.prices[tradePick];
+    sum.innerHTML = `${shares.toLocaleString("fr-FR", { maximumFractionDigits: 1 })} parts à ${cents(selected.prices[tradePick])}. Si tu as raison : <b class="up">${money.format(
+      shares
+    )}</b> (${signedMoney(shares - amount)}). Sinon : <b class="down">${signedMoney(-amount)}</b>.`;
+    go.disabled = false;
+  };
+
+  const renderTrade = () => {
+    $("trade").innerHTML = tradePanel(ev, selected, tradePick);
+    updateSummary();
+  };
+
   setTitle();
+  renderTrade();
+
+  $("detail-body").oninput = (e) => {
+    if (e.target.id === "trade-amount") updateSummary();
+  };
 
   $("detail-body").onclick = (e) => {
     const tab = e.target.closest("[data-interval]");
@@ -412,11 +563,44 @@ function openDetail(id) {
       drawHistory(selected, interval);
       return;
     }
+    const pickBtn = e.target.closest("[data-pick]");
+    if (pickBtn) {
+      tradePick = Number(pickBtn.dataset.pick);
+      $("trade").querySelectorAll("[data-pick]").forEach((b) => b.classList.toggle("on", b === pickBtn));
+      updateSummary();
+      return;
+    }
+    const amountBtn = e.target.closest("[data-amount]");
+    if (amountBtn) {
+      $("trade-amount").value = amountBtn.dataset.amount;
+      updateSummary();
+      return;
+    }
+    if (e.target.closest("#trade-go")) {
+      try {
+        const amount = parseFloat($("trade-amount").value);
+        const pos = buy(state.portfolio, { event: ev, market: selected, outcomeIndex: tradePick, amount });
+        toast(`Prédiction enregistrée : ${translateOutcome(pos.outcome)} à ${cents(pos.price)} pour ${money.format(pos.stake)}.`, "ok");
+        tradePick = null;
+        renderTrade();
+      } catch (err) {
+        toast(err.message, "err");
+      }
+      return;
+    }
+    const alertLink = e.target.closest("[data-alert-market]");
+    if (alertLink) {
+      const m = ev.markets.find((x) => x.conditionId === alertLink.dataset.alertMarket);
+      if (m && !isBinary(ev)) $("detail-body").querySelector(`[data-market="${CSS.escape(m.id)}"]`)?.click();
+      return;
+    }
     const row = e.target.closest("[data-market]");
     if (row) {
       selected = ev.markets.find((m) => m.id === row.dataset.market) ?? selected;
+      tradePick = null;
       $("detail-body").querySelectorAll("[data-market]").forEach((b) => b.classList.toggle("selected", b === row));
       setTitle();
+      renderTrade();
       drawHistory(selected, interval);
       $("detail-chart").scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
@@ -424,7 +608,7 @@ function openDetail(id) {
 
   if (!dlg.open) dlg.showModal();
   dlg.querySelector(".detail-inner").scrollTop = 0;
-  history.replaceState(null, "", `#${encodeURIComponent(ev.slug || ev.id)}`);
+  if (!keepHash) history.replaceState(null, "", `#marche/${encodeURIComponent(ev.slug || ev.id)}`);
   drawHistory(selected, interval);
 }
 
@@ -495,11 +679,14 @@ function bind() {
   });
   $("detail").addEventListener("close", () => {
     detailToken++;
-    history.replaceState(null, "", location.pathname + location.search);
+    history.replaceState(null, "", viewHash(state.view));
+    renderView(); // reflète les nouvelles prédictions
   });
 
+  window.addEventListener("hashchange", onRoute);
+
   document.addEventListener("keydown", (e) => {
-    if (e.key === "/" && document.activeElement !== $("search") && !$("detail").open) {
+    if (e.key === "/" && state.view === "markets" && document.activeElement !== $("search") && !$("detail").open) {
       e.preventDefault();
       $("search").focus();
     }
@@ -524,16 +711,47 @@ function restoreTheme() {
   } catch {}
 }
 
+// ---------- Chargement ----------
+
+async function refreshAlerts() {
+  try {
+    const { alerts, updatedAt } = await loadAlerts();
+    state.alerts = alerts;
+    state.alertsUpdatedAt = updatedAt;
+    state.alertsError = false;
+  } catch {
+    state.alerts ??= [];
+    state.alertsError = true;
+  }
+}
+
+// Met à jour le prix / le résultat des marchés du portefeuille qui ne sont
+// plus dans la liste, puis règle les positions terminées.
+async function refreshPortfolioMarkets() {
+  const open = state.portfolio.positions.filter((p) => p.status === "open");
+  const ids = [...new Set(open.map((p) => p.marketId))].filter((id) => !marketIndex.byId.has(id));
+  if (ids.length === 0) return;
+  state.marketStates = { ...state.marketStates, ...(await loadMarketStates(ids)) };
+  const n = settle(state.portfolio, state.marketStates);
+  if (n) toast(`${n} prédiction${n > 1 ? "s" : ""} terminée${n > 1 ? "s" : ""} : va voir ton portefeuille !`, "ok");
+}
+
 async function refresh({ initial = false } = {}) {
   try {
-    const data = await loadEvents({ preferLive: initial || state.source === "live" });
+    const [data] = await Promise.all([
+      loadEvents({ preferLive: initial || state.source === "live" }),
+      refreshAlerts(),
+    ]);
     Object.assign(state, data);
-    render();
-    if (initial && location.hash) {
-      const key = decodeURIComponent(location.hash.slice(1));
-      const ev = state.events.find((e) => e.slug === key || e.id === key);
-      if (ev) openDetail(ev.id);
+    indexMarkets();
+    await refreshPortfolioMarkets();
+    if ($("detail").open) {
+      renderStatus();
+      renderAlertsBadge();
+    } else {
+      renderView();
     }
+    if (initial) onRoute();
   } catch (err) {
     console.error(err);
     if (initial) {
@@ -550,7 +768,8 @@ async function refresh({ initial = false } = {}) {
 
 restoreTheme();
 bind();
-renderStatus();
+state.view = viewFromHash().view;
+renderView();
 renderSkeleton();
 refresh({ initial: true });
 setInterval(() => {

@@ -22,12 +22,13 @@ function num(value) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function normalizeMarket(m) {
+export function normalizeMarket(m) {
   const outcomes = parseList(m.outcomes).map(String);
   const prices = parseList(m.outcomePrices).map(num);
   const tokens = parseList(m.clobTokenIds).map(String);
   return {
     id: String(m.id ?? ""),
+    conditionId: m.conditionId ?? "",
     question: m.question ?? "",
     label: m.groupItemTitle || "",
     outcomes,
@@ -69,6 +70,14 @@ export function normalizeEvent(e) {
     tags,
     markets,
   };
+}
+
+// Issue gagnante d'un marché clôturé (index dans outcomes), ou null si le
+// résultat n'est pas encore connu.
+export function winnerIndex(market) {
+  if (!market.closed) return null;
+  const i = market.prices.findIndex((p) => p >= 0.98);
+  return i >= 0 ? i : null;
 }
 
 export function normalizeEvents(rawEvents) {

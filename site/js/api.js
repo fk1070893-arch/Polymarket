@@ -2,7 +2,7 @@
 // direct, et si elle est injoignable (blocage FAI, CORS, panne), on se
 // rabat sur l'instantané data/events.json généré par la GitHub Action.
 
-import { normalizeEvents } from "./normalize.js";
+import { normalizeEvents, normalizeMarket, winnerIndex } from "./normalize.js";
 
 export const GAMMA = "https://gamma-api.polymarket.com";
 export const CLOB = "https://clob.polymarket.com";
@@ -91,4 +91,46 @@ export async function loadHistory(tokenId, interval = "1w") {
     return { points: cached.map(([t, p]) => ({ t: t * 1000, p })), source: "snapshot" };
   }
   return { points: [], source: "none" };
+}
+
+// Alertes de paris suspects, générées par la GitHub Action.
+export async function loadAlerts() {
+  const data = await fetchJSON(`data/alerts.json?t=${Date.now()}`, 15000);
+  return { alerts: data.alerts ?? [], updatedAt: data.updatedAt };
+}
+
+// État (prix, clôture, gagnant) de marchés précis, pour le portefeuille.
+// Retourne { marketId: { p: [prix], x: 0|1, w: index gagnant|null } }.
+export async function loadMarketStates(ids) {
+  const states = {};
+  if (ids.length === 0) return states;
+
+  try {
+    const snap = await fetchJSON(`data/markets.json?t=${Date.now()}`, 15000);
+    for (const id of ids) if (snap.markets?.[id]) states[id] = snap.markets[id];
+  } catch {
+    // pas d'instantané : on compte sur l'API en direct
+  }
+
+  // L'API en direct est plus à jour que l'instantané quand elle répond.
+  const query = async (list, extra = "") => {
+    const qs = list.map((id) => `id=${encodeURIComponent(id)}`).join("&");
+    return fetchJSON(`${GAMMA}/markets?${qs}&limit=${list.length}${extra}`, 6000);
+  };
+  try {
+    for (let i = 0; i < ids.length; i += 50) {
+      const batch = ids.slice(i, i + 50);
+      let rows = await query(batch);
+      const got = new Set(rows.map((r) => String(r.id)));
+      const missing = batch.filter((id) => !got.has(id));
+      if (missing.length) rows = rows.concat(await query(missing, "&closed=true").catch(() => []));
+      for (const r of rows) {
+        const m = normalizeMarket(r);
+        states[m.id] = { p: m.prices, x: m.closed ? 1 : 0, w: winnerIndex(m) };
+      }
+    }
+  } catch {
+    // API injoignable : on garde l'instantané
+  }
+  return states;
 }

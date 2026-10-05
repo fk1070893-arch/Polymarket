@@ -21,9 +21,14 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z" /></svg>
         </button>
       </div>
+      <nav class="wrap views" aria-label="Sections">
+        <a href="#" data-view="markets" class="view-tab">Marchés</a>
+        <a href="#alertes" data-view="alerts" class="view-tab">Alertes <span class="badge" id="alerts-badge" hidden></span></a>
+        <a href="#portefeuille" data-view="portfolio" class="view-tab">Mon portefeuille</a>
+      </nav>
     </header>
 
-    <main class="wrap">
+    <main class="wrap" id="view-markets" data-view-panel="markets">
       <section class="controls" aria-label="Filtres">
         <div class="search">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" /></svg>
@@ -52,12 +57,57 @@
       </div>
     </main>
 
+    <main class="wrap" id="view-alerts" data-view-panel="alerts" hidden>
+      <section class="intro">
+        <h1>Paris suspects</h1>
+        <p>
+          Gros paris (2 000 $ et plus) qui ressemblent à ceux d'un initié : wallet tout neuf, mise sur une issue
+          improbable, plusieurs wallets qui misent pareil en même temps… Le score va de 0 à 100. Un score élevé
+          n'est <strong>pas une preuve</strong> : c'est un signal à creuser.
+        </p>
+      </section>
+      <section class="controls" aria-label="Filtres des alertes">
+        <label class="sort">
+          <span>Score minimum</span>
+          <select id="alerts-min">
+            <option value="35">35+ (tout)</option>
+            <option value="50" selected>50+</option>
+            <option value="70">70+ (très suspect)</option>
+          </select>
+        </label>
+        <label class="sort">
+          <span>Trier par</span>
+          <select id="alerts-sort">
+            <option value="recent">Plus récents</option>
+            <option value="score">Score</option>
+            <option value="cash">Montant</option>
+            <option value="move">Évolution depuis le pari</option>
+          </select>
+        </label>
+      </section>
+      <nav class="chips" id="alerts-chips" aria-label="Catégories des alertes"></nav>
+      <section class="alerts" id="alerts-list" aria-live="polite"></section>
+    </main>
+
+    <main class="wrap" id="view-portfolio" data-view-panel="portfolio" hidden>
+      <section class="intro">
+        <h1>Mon portefeuille fictif</h1>
+        <p>
+          Tu commences avec 1 000 $ fictifs. Ouvre un marché et fais ta prédiction : tu achètes des parts au prix
+          actuel, chaque part rapporte 1 $ si tu as raison. Le site calcule si tu fais mieux que le marché.
+          Rien n'est réel, aucun argent n'est engagé.
+        </p>
+      </section>
+      <section id="portfolio-body" aria-live="polite"></section>
+    </main>
+
     <footer class="wrap footer">
       <p>
         Lecture seule, à titre informatif. Données publiques de l'API Polymarket : aucun pari n'est possible depuis ce site.
         Les probabilités reflètent les prix du marché, pas des certitudes.
       </p>
     </footer>
+    <div class="toast" id="toast-page" role="status" hidden></div>
 
     <dialog id="detail" class="detail" aria-labelledby="detail-title">
       <div class="detail-inner">
@@ -65,6 +115,7 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
         </button>
         <div id="detail-body"></div>
+        <div class="toast" id="toast" role="status" hidden></div>
       </div>
     </dialog>
   </body>

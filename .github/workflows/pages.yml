@@ -11,9 +11,11 @@ permissions:
   pages: write
   id-token: write
 
+# Une seule publication à la fois ; les suivantes attendent leur tour
+# (sinon, avec une exécution toutes les 5 min, aucune n'irait au bout).
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -30,10 +32,20 @@ jobs:
         with:
           node-version: 22
 
+      - id: pages
+        uses: actions/configure-pages@v5
+
+      # PAGES_URL permet aux scripts de relire l'état de la publication précédente
       - name: Récupérer les marchés Polymarket
         run: node scripts/build-snapshot.mjs
+        env:
+          PAGES_URL: ${{ steps.pages.outputs.base_url }}
 
-      - uses: actions/configure-pages@v5
+      - name: Détecter les paris suspects
+        run: node scripts/build-alerts.mjs
+        continue-on-error: true
+        env:
+          PAGES_URL: ${{ steps.pages.outputs.base_url }}
 
       - uses: actions/upload-pages-artifact@v3
         with:
