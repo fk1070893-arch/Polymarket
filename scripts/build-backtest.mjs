@@ -233,6 +233,29 @@ async function cryptoStudy() {
   };
 }
 
+// Résumé lisible dans les logs de l'Action
+function logSummary(calib, crypto) {
+  const p = (v) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${Math.round(v * 100)}%`);
+  const rows = (bins) =>
+    bins
+      .filter((b) => b.n > 0)
+      .map(
+        (b) =>
+          `  ${Math.round(b.lo * 100)}-${Math.round(b.hi * 100)}% n=${b.n} prix=${Math.round(b.avgPrice * 100)}% réel=${Math.round(b.freq * 100)}% ` +
+          `Oui=${p(b.roiYes)} (A ${p(b.A.roiYes)} / B ${p(b.B.roiYes)}) Non=${p(b.roiNo)} (A ${p(b.A.roiNo)} / B ${p(b.B.roiNo)})`
+      )
+      .join("\n");
+  console.log(`\n=== Calibration (${calib.n} marchés, Brier ${calib.brier?.toFixed(3)}) ===\n${rows(calib.bins)}`);
+  for (const [g, r] of Object.entries(calib.byGroup)) console.log(`--- ${g} (${r.n}, Brier ${r.brier.toFixed(3)}) ---\n${rows(r.bins)}`);
+  if (crypto?.n) {
+    console.log(`\n=== Modèle crypto (${crypto.n} marchés) Brier modèle ${crypto.brierModel.toFixed(3)} / Polymarket ${crypto.brierPoly.toFixed(3)} ===`);
+    for (const [t, r] of Object.entries(crypto.thresholds))
+      console.log(`  écart ≥ ${Math.round(t * 100)} pts : ${r.all.bets} paris, ${r.all.wins} gagnés, gain/pari ${p(r.all.roi)} (A ${p(r.A.roi)} / B ${p(r.B.roi)})`);
+    for (const [k, r] of Object.entries(crypto.byKind))
+      console.log(`  ${k} : n=${r.n} Brier modèle ${r.brierModel.toFixed(3)} / Polymarket ${r.brierPoly.toFixed(3)}, signaux ${r.signals.all.bets}, gain/pari ${p(r.signals.all.roi)}`);
+  }
+}
+
 // ---------- Programme principal ----------
 
 const prev = await loadPrevious("backtest.json");
@@ -254,6 +277,7 @@ if (prev && !force && age < REFRESH_EVERY) {
       crypto,
     });
     console.log(`Backtest terminé en ${Math.round((Date.now() - started) / 1000)} s`);
+    logSummary(calib, crypto);
   } catch (err) {
     console.log(`::warning::Backtest en échec : ${err.message}`);
     if (prev) await writeData("backtest.json", prev);
