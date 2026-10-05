@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Polymarket Viewer</title>
+    <meta name="description" content="Consultez les marchés et probabilités de Polymarket, en lecture seule." />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%232563eb'/><path d='M7 22l6-7 5 4 7-9' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>" />
+    <link rel="stylesheet" href="css/style.css" />
+    <script type="module" src="js/app.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="wrap topbar-inner">
+        <a class="brand" href="./" aria-label="Accueil">
+          <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" /><path d="M7 22l6-7 5 4 7-9" /></svg>
+          <span>Polymarket <em>Viewer</em></span>
+        </a>
+        <div class="status" id="status" aria-live="polite"></div>
+        <button class="icon-btn" id="theme-toggle" type="button" aria-label="Changer de thème" title="Changer de thème">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z" /></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <section class="controls" aria-label="Filtres">
+        <div class="search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" /></svg>
+          <input id="search" type="search" placeholder="Rechercher un marché (élection, bitcoin, PSG…)" autocomplete="off" />
+        </div>
+        <label class="sort">
+          <span>Trier par</span>
+          <select id="sort">
+            <option value="volume24h">Volume 24 h</option>
+            <option value="volume">Volume total</option>
+            <option value="liquidity">Liquidité</option>
+            <option value="movers">Plus fortes variations</option>
+            <option value="ending">Fin la plus proche</option>
+            <option value="newest">Plus récents</option>
+          </select>
+        </label>
+      </section>
+
+      <nav class="chips" id="chips" aria-label="Catégories"></nav>
+
+      <section class="stats" id="stats" aria-label="Résumé"></section>
+
+      <section class="grid" id="grid" aria-live="polite"></section>
+      <div class="more">
+        <button class="btn" id="more" type="button" hidden>Afficher plus</button>
+      </div>
+    </main>
+
+    <footer class="wrap footer">
+      <p>
+        Lecture seule, à titre informatif. Données publiques de l'API Polymarket : aucun pari n'est possible depuis ce site.
+        Les probabilités reflètent les prix du marché, pas des certitudes.
+      </p>
+    </footer>
+
+    <dialog id="detail" class="detail" aria-labelledby="detail-title">
+      <div class="detail-inner">
+        <button class="icon-btn close" id="detail-close" type="button" aria-label="Fermer">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+        </button>
+        <div id="detail-body"></div>
+      </div>
+    </dialog>
+  </body>
+</html>

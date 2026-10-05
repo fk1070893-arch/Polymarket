@@ -1,0 +1,10 @@
+{
+  "name": "polymarket-viewer",
+  "private": true,
+  "type": "module",
+  "description": "Consultation en lecture seule des marchés Polymarket",
+  "scripts": {
+    "snapshot": "node scripts/build-snapshot.mjs",
+    "start": "npx --yes serve site"
+  }
+}
