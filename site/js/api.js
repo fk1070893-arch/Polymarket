@@ -134,3 +134,8 @@ export async function loadMarketStates(ids) {
   }
   return states;
 }
+
+// Modèle crypto (options Deribit vs Polymarket), généré par la GitHub Action.
+export async function loadCrypto() {
+  return fetchJSON(`data/crypto.json?t=${Date.now()}`, 15000);
+}

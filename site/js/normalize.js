@@ -36,6 +36,7 @@ export function normalizeMarket(m) {
     tokenId: tokens[0] ?? null,
     change24h: num(m.oneDayPriceChange),
     volume: num(m.volumeNum ?? m.volume),
+    endDate: m.endDate ?? null,
     active: m.active !== false,
     closed: m.closed === true,
   };

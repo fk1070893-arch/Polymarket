@@ -26,6 +26,12 @@ L'onglet **Alertes** liste les gros paris (≥ 2 000 $) qui ressemblent à ceux 
 
 Seuls les paris à 35 points ou plus sont gardés (7 jours d'historique). Pour chaque alerte, le site montre aussi l'évolution du prix depuis le pari : c'est le meilleur moyen de voir si ces wallets avaient vraiment une info. Un score élevé n'est **pas une preuve** de délit d'initié.
 
+### Modèle crypto
+
+Pour les marchés « BTC/ETH au-dessus de X $ le … », « entre A et B $ », « atteint / chute à X $ avant le … », l'onglet **Modèle crypto** calcule une probabilité à partir de la volatilité implicite des options **Deribit** (surface interpolée selon le prix d'exercice et l'échéance, modèle log-normal ; formule de réflexion pour les marchés « atteint ») et la compare au prix Polymarket. Un écart d'au moins 5 points est signalé. Si Deribit ne répond pas, le modèle utilise la volatilité réalisée sur 30 jours (Coinbase).
+
+Le site fige aussi, pour chaque marché, les deux probabilités 24 h avant l'échéance puis note le résultat : la section « Est-ce que le modèle a raison ? » compare les scores de Brier et le résultat qu'aurait donné le suivi de tous les signaux.
+
 ### Portefeuille fictif
 
 Dans chaque fiche de marché, le bloc **Ma prédiction** permet d'acheter des parts avec 1 000 $ fictifs, au prix du marché. Une part vaut 1 $ si l'issue gagne, 0 sinon. L'onglet **Mon portefeuille** suit la valeur des prédictions, les règle automatiquement quand le marché se termine, et compare ton taux de réussite à celui attendu par le marché (« est-ce que tu bats le marché ? »). Les données restent dans le navigateur (export / import en JSON).
@@ -39,11 +45,12 @@ navigateur ──► API Polymarket (direct)          ✔ badge « En direct »
                            (généré toutes les 5 min par la GitHub Action)
 ```
 
-La GitHub Action génère trois fichiers à chaque passage :
+La GitHub Action génère quatre fichiers à chaque passage :
 
 - `data/events.json` : marchés ouverts et historiques 7 jours ;
 - `data/markets.json` : dernier prix et résultat final des marchés déjà vus (pour régler le portefeuille) ;
-- `data/alerts.json` : paris suspects des 7 derniers jours.
+- `data/alerts.json` : paris suspects des 7 derniers jours ;
+- `data/crypto.json` : modèle crypto et historique de ses prédictions.
 
 Comme une Action n'a pas de mémoire, chaque passage relit l'état précédent depuis le site publié.
 
@@ -64,6 +71,8 @@ Le site est ensuite disponible sur `https://<ton-pseudo>.github.io/Polymarket/` 
 ```bash
 npm run snapshot   # récupère les marchés (nécessite l'accès à l'API)
 npm run alerts     # détecte les paris suspects
+npm run crypto     # modèle crypto
+npm test           # tests du modèle crypto
 npm start          # sert le dossier site/ sur http://localhost:3000
 ```
 
@@ -81,6 +90,9 @@ npm start          # sert le dossier site/ sur http://localhost:3000
 | `site/js/chart.js` | Graphiques SVG sans dépendance |
 | `scripts/build-snapshot.mjs` | Génère `events.json` et `markets.json` |
 | `scripts/build-alerts.mjs` | Détecte les paris suspects → `alerts.json` |
+| `scripts/crypto-model.mjs` | Maths du modèle crypto (+ tests `npm test`) |
+| `scripts/build-crypto.mjs` | Modèle crypto → `crypto.json` |
+| `site/js/view-crypto.js` | Onglet Modèle crypto |
 | `.github/workflows/pages.yml` | Instantané + déploiement toutes les 5 min |
 
 Les probabilités sont les prix du marché, pas des certitudes. Données publiques de Polymarket, à titre informatif uniquement.

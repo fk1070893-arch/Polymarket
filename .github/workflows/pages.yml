@@ -47,6 +47,12 @@ jobs:
         env:
           PAGES_URL: ${{ steps.pages.outputs.base_url }}
 
+      - name: Modèle crypto (options Deribit)
+        run: node scripts/build-crypto.mjs
+        continue-on-error: true
+        env:
+          PAGES_URL: ${{ steps.pages.outputs.base_url }}
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site

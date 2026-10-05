@@ -6,6 +6,8 @@
   "scripts": {
     "snapshot": "node scripts/build-snapshot.mjs",
     "alerts": "node scripts/build-alerts.mjs",
+    "crypto": "node scripts/build-crypto.mjs",
+    "test": "node --test scripts/*.test.mjs",
     "start": "npx --yes serve site"
   }
 }

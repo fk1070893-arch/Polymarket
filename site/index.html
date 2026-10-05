@@ -24,6 +24,7 @@
       <nav class="wrap views" aria-label="Sections">
         <a href="#" data-view="markets" class="view-tab">Marchés</a>
         <a href="#alertes" data-view="alerts" class="view-tab">Alertes <span class="badge" id="alerts-badge" hidden></span></a>
+        <a href="#crypto" data-view="crypto" class="view-tab">Modèle crypto</a>
         <a href="#portefeuille" data-view="portfolio" class="view-tab">Mon portefeuille</a>
       </nav>
     </header>
@@ -87,6 +88,18 @@
       </section>
       <nav class="chips" id="alerts-chips" aria-label="Catégories des alertes"></nav>
       <section class="alerts" id="alerts-list" aria-live="polite"></section>
+    </main>
+
+    <main class="wrap" id="view-crypto" data-view-panel="crypto" hidden>
+      <section class="intro">
+        <h1>Modèle crypto</h1>
+        <p>
+          Pour les marchés du type « BTC au-dessus de X $ le … », on calcule la probabilité à partir des options
+          échangées sur Deribit (la volatilité que les pros anticipent), puis on la compare au prix Polymarket.
+          Un gros écart signale une cote peut-être mal placée.
+        </p>
+      </section>
+      <section id="crypto-body" aria-live="polite"></section>
     </main>
 
     <main class="wrap" id="view-portfolio" data-view-panel="portfolio" hidden>

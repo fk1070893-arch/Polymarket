@@ -1,4 +1,4 @@
-import { loadAlerts, loadEvents, loadHistory, loadMarketStates } from "./api.js";
+import { loadAlerts, loadCrypto, loadEvents, loadHistory, loadMarketStates } from "./api.js";
 import { mainMarket, yesPrice } from "./normalize.js";
 import { lineChart, sparkline } from "./chart.js";
 import {
@@ -20,10 +20,11 @@ import {
 import { buy, loadPortfolio, settle } from "./portfolio.js";
 import { renderAlerts, alertsForEvent, alertMiniList } from "./view-alerts.js";
 import { renderPortfolio } from "./view-portfolio.js";
+import { cryptoForMarket, renderCrypto } from "./view-crypto.js";
 
 const PAGE = 24;
 const LIVE_REFRESH_MS = 2 * 60 * 1000;
-const VIEWS = { "": "markets", alertes: "alerts", portefeuille: "portfolio" };
+const VIEWS = { "": "markets", alertes: "alerts", crypto: "crypto", portefeuille: "portfolio" };
 
 const state = {
   view: "markets",
@@ -40,6 +41,7 @@ const state = {
   alertsUpdatedAt: null,
   alertsError: false,
   portfolio: loadPortfolio(),
+  crypto: null, // modèle crypto (null = pas encore chargé, false = indisponible)
   marketStates: {}, // prix / résultats des marchés hors liste (portefeuille)
 };
 
@@ -351,6 +353,8 @@ function renderView() {
     renderGrid();
   } else if (state.view === "alerts") {
     renderAlerts(ctx);
+  } else if (state.view === "crypto") {
+    renderCrypto(ctx);
   } else {
     renderPortfolio(ctx);
   }
@@ -373,6 +377,7 @@ function onRoute() {
     state.view = view;
     window.scrollTo({ top: 0 });
   }
+  if (!slug && $("detail").open) $("detail").close(); // lien vers un onglet depuis une fiche
   renderView();
   if (slug) {
     const ev = state.events.find((e) => e.slug === slug || e.id === slug);
@@ -411,12 +416,18 @@ function tradePanel(ev, market, pick) {
     })
     .join("");
   const mine = state.portfolio.positions.filter((p) => p.status === "open" && p.eventId === ev.id);
+  const model = cryptoForMarket(state, market.id);
+  const modelLine = model
+    ? `<p class="model-hint">Modèle options Deribit : <b>${pct(model.model)}</b> pour « Oui » (Polymarket : ${pct(yesPrice(market))}).
+        <a href="#crypto">Voir le modèle crypto</a></p>`
+    : "";
   return `
     <div class="trade-head">
       <h3>Ma prédiction <span class="muted">(fictive)</span></h3>
       <span class="muted">Solde : <b>${money.format(cash)}</b></span>
     </div>
     ${isBinary(ev) ? "" : `<p class="hint">Issue : <b>${esc(market.label || market.question)}</b></p>`}
+    ${modelLine}
     <div class="picks">${options}</div>
     <div class="amount">
       <label for="trade-amount">Mise</label>
@@ -713,6 +724,23 @@ function restoreTheme() {
 
 // ---------- Chargement ----------
 
+async function refreshCrypto() {
+  try {
+    state.crypto = await loadCrypto();
+  } catch {
+    state.crypto ??= false;
+  }
+}
+
+// Les marchés crypto analysés ne sont pas tous dans le top 500 : on ajoute
+// leurs événements pour pouvoir ouvrir leur fiche.
+function mergeCryptoEvents() {
+  const extra = state.crypto?.events ?? [];
+  if (!extra.length) return;
+  const known = new Set(state.events.map((e) => e.id));
+  state.events = state.events.concat(extra.filter((e) => !known.has(e.id)));
+}
+
 async function refreshAlerts() {
   try {
     const { alerts, updatedAt } = await loadAlerts();
@@ -741,8 +769,10 @@ async function refresh({ initial = false } = {}) {
     const [data] = await Promise.all([
       loadEvents({ preferLive: initial || state.source === "live" }),
       refreshAlerts(),
+      refreshCrypto(),
     ]);
     Object.assign(state, data);
+    mergeCryptoEvents();
     indexMarkets();
     await refreshPortfolioMarkets();
     if ($("detail").open) {
