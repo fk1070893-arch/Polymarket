@@ -52,7 +52,7 @@ Dans chaque fiche de marché, le bloc **Ma prédiction** permet d'acheter des pa
 navigateur ──► API Polymarket (direct)          ✔ badge « En direct »
      │
      └─ si injoignable ──► data/events.json      ✔ badge « Instantané »
-                           (généré toutes les 5 min par la GitHub Action)
+                           (généré toutes les 15 min par la GitHub Action)
 ```
 
 La GitHub Action génère cinq fichiers à chaque passage :
@@ -65,7 +65,7 @@ La GitHub Action génère cinq fichiers à chaque passage :
 
 Comme une Action n'a pas de mémoire, chaque passage relit l'état précédent depuis le site publié.
 
-Si ta connexion bloque les domaines Polymarket, le site affiche automatiquement le dernier instantané récupéré par GitHub (en général moins de 15 minutes de retard : GitHub lance parfois les tâches planifiées en retard).
+Si ta connexion bloque les domaines Polymarket, le site affiche automatiquement le dernier instantané récupéré par GitHub (en général moins de 30 minutes de retard : GitHub lance parfois les tâches planifiées en retard).
 
 ## Mise en ligne (GitHub Pages)
 
@@ -73,7 +73,7 @@ Si ta connexion bloque les domaines Polymarket, le site affiche automatiquement 
 2. Dans **Settings → Pages**, choisir **Source : GitHub Actions**.
 3. Lancer une première fois **Actions → Publier le site → Run workflow**.
 
-Le site est ensuite disponible sur `https://<ton-pseudo>.github.io/Polymarket/` et se met à jour tout seul toutes les 5 minutes.
+Le site est ensuite disponible sur `https://<ton-pseudo>.github.io/Polymarket/` et se met à jour tout seul toutes les 15 minutes.
 
 > GitHub Pages est gratuit pour les dépôts **publics**. Pour un dépôt privé, il faut un compte GitHub Pro.
 
@@ -108,6 +108,6 @@ npm start          # sert le dossier site/ sur http://localhost:3000
 | `scripts/backtest-lib.mjs` | Calculs du backtest (+ tests) |
 | `scripts/build-backtest.mjs` | Backtest → `backtest.json` |
 | `site/js/view-backtest.js` | Onglet Backtest |
-| `.github/workflows/pages.yml` | Instantané + déploiement toutes les 5 min |
+| `.github/workflows/pages.yml` | Instantané + déploiement toutes les 15 min |
 
 Les probabilités sont les prix du marché, pas des certitudes. Données publiques de Polymarket, à titre informatif uniquement.

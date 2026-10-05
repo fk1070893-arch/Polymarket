@@ -3,7 +3,7 @@ name: Publier le site
 on:
   push:
   schedule:
-    - cron: "*/5 * * * *" # instantané des marchés toutes les 5 minutes (minimum autorisé par GitHub)
+    - cron: "*/15 * * * *" # instantané des marchés toutes les 15 minutes
   workflow_dispatch:
     inputs:
       backtest:
@@ -17,7 +17,7 @@ permissions:
   id-token: write
 
 # Une seule publication automatique à la fois ; les suivantes attendent
-# leur tour (sinon, avec une exécution toutes les 5 min, aucune n'irait au
+# leur tour (sinon, avec une exécution toutes les 15 min, aucune n'irait au
 # bout). Les lancements manuels ont leur propre file : GitHub ne garde
 # qu'une exécution en attente par file, et un passage automatique
 # remplacerait sinon un recalcul demandé à la main.
