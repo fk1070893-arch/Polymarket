@@ -30,7 +30,6 @@ const RULE = {
     "Marchés de 5 à 7 h, prévus pour durer au moins 3 jours, dont le « Oui » est affiché entre 40 et 60 % : 1 $ fictif sur « Non » au vrai prix vendeur du carnet d'ordres. Résultat compté sur les marchés finis avec au moins 1 000 $ de volume, comme dans le backtest.",
 };
 
-const ageOf = (raw, now) => now - (parseTime(raw.startDate) ?? parseTime(raw.createdAt) ?? now);
 
 // Marchés bruts d'une page Gamma ; les événements sont dépliés en marchés
 // (en leur rattachant l'événement, comme le fait /markets)
@@ -38,16 +37,20 @@ async function page(kind, params, offset) {
   const qs = new URLSearchParams({ active: "true", closed: "false", limit: "100", offset: String(offset), ...params });
   const rows = await getJSON(`${GAMMA}/${kind}?${qs}`);
   const markets = kind === "events" ? rows.flatMap((ev) => (ev.markets ?? []).map((m) => ({ ...m, events: [ev] }))) : rows;
-  return { markets, n: rows.length };
+  // Âge de chaque ligne, dans l'ordre du tri (l'événement lui-même, pas ses marchés)
+  const created = (r) => parseTime(r.createdAt) ?? parseTime(r.startDate);
+  const ages = rows.map((r) => (created(r) != null ? Date.now() - created(r) : Infinity));
+  return { markets, ages, n: rows.length };
 }
 
 // L'API ne documente pas bien le tri par date de création : on essaie
 // plusieurs façons et on garde la première qui renvoie des marchés récents.
+// Les événements d'abord : ils regroupent les marchés et respectent le
+// filtre de date de fin.
 const QUERIES = [
-  ["markets", { order: "createdAt", ascending: "false" }],
-  ["markets", { order: "startDate", ascending: "false" }],
   ["events", { order: "createdAt", ascending: "false" }],
   ["events", { order: "startDate", ascending: "false" }],
+  ["markets", { order: "createdAt", ascending: "false" }],
 ];
 
 async function youngMarkets(now) {
@@ -63,20 +66,22 @@ async function youngMarkets(now) {
       return null;
     });
     if (!first?.markets.length) continue;
-    const youngest = Math.min(...first.markets.map((r) => ageOf(r, now)));
+    const youngest = Math.min(...first.ages);
     console.log(`  ${label} : marché le plus récent ouvert il y a ${Math.round(youngest / 60000)} min`);
     if (youngest > AGE[1]) continue;
     // Tri du plus récent au plus ancien : on s'arrête une fois passé 7 h
     const out = new Map();
     let cur = first;
     let oldestSeen = 0;
-    for (let offset = 0; offset < 3000; ) {
+    // L'API refuse d'aller au-delà de 2 000 résultats
+    for (let offset = 0; offset < 1900; ) {
       for (const r of cur.markets) out.set(String(r.id), r);
-      const oldest = Math.max(...cur.markets.map((r) => ageOf(r, now)));
+      const oldest = Math.max(...cur.ages.filter(Number.isFinite), 0);
       oldestSeen = Math.max(oldestSeen, oldest);
       if (cur.n < 100 || oldest > AGE[1] + HOUR) break;
       offset += 100;
-      cur = await page(kind, params, offset);
+      cur = await page(kind, params, offset).catch(() => null);
+      if (!cur?.markets.length) break;
     }
     console.log(`  → ${label} retenu, ${out.size} marchés lus, jusqu'à ${Math.round(oldestSeen / 60000)} min d'âge`);
     return [...out.values()];
