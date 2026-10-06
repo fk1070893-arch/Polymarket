@@ -13,15 +13,16 @@
 // l'identité réelle de quelqu'un. Un transfert ne prouve pas que ce soit la
 // même personne (ça peut être un paiement).
 //
-// Source : explorateur Blockscout de Polygon (gratuit, sans clé), ou
-// Etherscan si le secret ETHERSCAN_API_KEY existe. Une fois par heure.
+// Source : serveurs publics de la blockchain Polygon (gratuits, sans clé),
+// ou Etherscan si le secret ETHERSCAN_API_KEY existe. Une fois par heure.
 // Résultat : site/data/wallets.json (mémoire : .state/wallets-state.json)
 
 import { getJSON, loadState, mapLimit, readData, writeState } from "./lib.mjs";
 
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
-const MAX_WALLETS = 25; // wallets examinés par passage
+const MAX_WALLETS = 15; // wallets examinés par passage
+const BUDGET = 150000; // temps maximum de lecture de la blockchain (ms)
 const RECHECK = DAY; // un wallet est réexaminé au plus une fois par jour
 const FUNDER_TTL = 7 * DAY;
 const DATA_API = "https://data-api.polymarket.com";
@@ -49,31 +50,127 @@ const now = Date.now();
 
 // ---------- Explorateur Polygon ----------
 
-// Premiers transferts de jetons d'une adresse (du plus ancien au plus récent)
-async function tokenTransfers(address) {
+// Serveurs publics de la blockchain Polygon (gratuits, sans clé) : on lit
+// directement les transferts de dollars, sans passer par un explorateur
+const RPCS = ["https://polygon-bor-rpc.publicnode.com", "https://polygon.drpc.org", "https://polygon-rpc.com", "https://1rpc.io/matic"];
+const TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+const BLOCK_TIME = 2; // secondes par bloc, à peu près
+let rpcIndex = 0;
+
+async function rpc(method, params) {
+  let lastErr;
+  for (let i = 0; i < RPCS.length; i++) {
+    const url = RPCS[(rpcIndex + i) % RPCS.length];
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status} sur ${new URL(url).host}`);
+      const data = await res.json();
+      if (data.error) throw Object.assign(new Error(`${data.error.message ?? "erreur"} (${new URL(url).host})`), { rpcError: true });
+      rpcIndex = (rpcIndex + i) % RPCS.length; // garde le serveur qui répond
+      return data.result;
+    } catch (err) {
+      lastErr = err;
+      // Une plage de blocs trop grande se règle en la coupant, pas en changeant de serveur
+      if (err.rpcError && /range|limit|too many|exceed/i.test(err.message)) throw err;
+    }
+  }
+  throw lastErr;
+}
+
+let head = null; // dernier bloc connu : { number, ts }
+async function latestBlock() {
+  if (!head) {
+    const b = await rpc("eth_getBlockByNumber", ["latest", false]);
+    head = { number: parseInt(b.number, 16), ts: parseInt(b.timestamp, 16) };
+  }
+  return head;
+}
+
+// Numéro du bloc produit vers l'instant `ts` (secondes), à quelques blocs près
+async function blockAt(ts) {
+  const h = await latestBlock();
+  let guess = Math.max(1, Math.round(h.number - (h.ts - ts) / BLOCK_TIME));
+  for (let i = 0; i < 2; i++) {
+    const b = await rpc("eth_getBlockByNumber", [`0x${guess.toString(16)}`, false]).catch(() => null);
+    if (!b) break;
+    const diff = ts - parseInt(b.timestamp, 16);
+    if (Math.abs(diff) < 60) break;
+    guess = Math.max(1, Math.min(h.number, Math.round(guess + diff / BLOCK_TIME)));
+  }
+  return guess;
+}
+
+// Dépôts de dollars reçus autour du premier pari du wallet (2 jours avant,
+// 3 heures après), lus bloc par bloc dans les journaux de la blockchain
+async function rpcTransfers(address, firstMs) {
+  const from = await blockAt(Math.floor(firstMs / 1000) - 2 * 86400);
+  const to = Math.min((await latestBlock()).number, await blockAt(Math.floor(firstMs / 1000) + 3 * 3600));
+  const h = await latestBlock();
+  const topic = `0x${"0".repeat(24)}${address.slice(2)}`;
+  const out = [];
+  let step = 10000;
+  for (let start = from; start <= to; ) {
+    const end = Math.min(to, start + step - 1);
+    let logs;
+    try {
+      logs = await rpc("eth_getLogs", [{ fromBlock: `0x${start.toString(16)}`, toBlock: `0x${end.toString(16)}`, address: [...USDC], topics: [TRANSFER, null, topic] }]);
+    } catch (err) {
+      if (err.rpcError && step > 500) {
+        step = Math.floor(step / 4);
+        continue;
+      }
+      throw err;
+    }
+    for (const l of logs ?? []) {
+      const bn = parseInt(l.blockNumber, 16);
+      out.push({
+        from: `0x${l.topics[1].slice(26)}`,
+        to: address,
+        value: BigInt(l.data).toString(),
+        tokenDecimal: "6",
+        contractAddress: l.address,
+        timeStamp: String(Math.round(h.ts - (h.number - bn) * BLOCK_TIME)),
+        hash: l.transactionHash,
+      });
+    }
+    start = end + 1;
+  }
+  return out.sort((a, b) => Number(a.timeStamp) - Number(b.timeStamp));
+}
+
+// Premiers transferts de dollars reçus par une adresse (du plus ancien au plus récent)
+async function tokenTransfers(address, firstMs) {
+  if (!ETHERSCAN_KEY) return rpcTransfers(address, firstMs);
   const qs = `module=account&action=tokentx&address=${address}&sort=asc&page=1&offset=200`;
-  const url = ETHERSCAN_KEY ? `https://api.etherscan.io/v2/api?chainid=137&${qs}&apikey=${ETHERSCAN_KEY}` : `${BLOCKSCOUT}/api?${qs}`;
   // Le message d'erreur contient l'adresse appelée : jamais la clé (publiée sinon)
-  const data = await getJSON(url, 2).catch((err) => {
+  const data = await getJSON(`https://api.etherscan.io/v2/api?chainid=137&${qs}&apikey=${ETHERSCAN_KEY}`, 2).catch((err) => {
     throw new Error(err.message.replace(/apikey=[^&\s]+/gi, "apikey=***"));
   });
   if (Array.isArray(data?.result)) return data.result;
   // « No transactions found » : liste vide ; toute autre réponse est une panne
   if (/no (token )?transfers|no transactions/i.test(`${data?.message} ${data?.result}`)) return [];
-  throw new Error(String(data?.message ?? "réponse inattendue"));
+  throw new Error(String(data?.message ?? "réponse inattendue").replace(/apikey=[^&\s]+/gi, "apikey=***"));
 }
 
-// Étiquette publique d'une adresse (nom d'échange, de pont…) et son activité
+// Ce qu'on sait d'une adresse : contrat ou non, nombre de transactions
+// envoyées (une plateforme en a des centaines de milliers), et son nom
+// public sur l'explorateur Blockscout quand il répond
 async function addressInfo(address) {
-  const [info, counters] = await Promise.all([
+  const [code, nonce, info] = await Promise.all([
+    rpc("eth_getCode", [address, "latest"]).catch(() => null),
+    rpc("eth_getTransactionCount", [address, "latest"]).catch(() => null),
     getJSON(`${BLOCKSCOUT}/api/v2/addresses/${address}`, 1).catch(() => null),
-    getJSON(`${BLOCKSCOUT}/api/v2/addresses/${address}/counters`, 1).catch(() => null),
   ]);
   const tags = [info?.name, ...(info?.public_tags ?? []).map((t) => t.display_name ?? t.label), ...(info?.metadata?.tags ?? []).map((t) => t.name)].filter(Boolean);
   return {
     label: tags[0] ?? null,
-    contract: info?.is_contract === true,
-    txs: num(counters?.transactions_count),
+    contract: info?.is_contract === true || (typeof code === "string" && code.length > 2),
+    txs: nonce != null ? parseInt(nonce, 16) : null,
   };
 }
 
@@ -118,8 +215,10 @@ async function main(prev) {
   for (const a of alerts) {
     if (!a.wallet || a.walletAge == null || a.walletAge > 30 * 86400) continue;
     const w = lc(a.wallet);
-    if (!byWallet.has(w)) byWallet.set(w, { wallet: w, name: a.name || "", age: a.walletAge, alerts: 0, won: 0, lost: 0, pnl: 0, cash: 0, best: 0 });
+    if (!byWallet.has(w)) byWallet.set(w, { wallet: w, name: a.name || "", age: a.walletAge, firstTrade: Infinity, alerts: 0, won: 0, lost: 0, pnl: 0, cash: 0, best: 0 });
     const x = byWallet.get(w);
+    // Premier pari connu du wallet : ses dépôts sont juste avant
+    x.firstTrade = Math.min(x.firstTrade, (a.ts - a.walletAge) * 1000);
     x.alerts++;
     x.cash += a.cash ?? 0;
     x.best = Math.max(x.best, a.score ?? 0);
@@ -137,9 +236,12 @@ async function main(prev) {
   const todo = winners.filter((x) => !traced[x.wallet] || now - traced[x.wallet].at > RECHECK).slice(0, MAX_WALLETS);
   let failures = 0;
   let lastError = "";
+  const deadline = Date.now() + BUDGET;
   await mapLimit(todo, 3, async (x) => {
+    // Plus le temps : ce wallet sera lu au prochain passage
+    if (Date.now() > deadline) return;
     try {
-      const txs = await tokenTransfers(x.wallet);
+      const txs = await tokenTransfers(x.wallet, x.firstTrade);
       const incoming = new Map();
       for (const t of txs) {
         if (lc(t.to) !== x.wallet || !USDC.has(lc(t.contractAddress))) continue;
@@ -184,12 +286,12 @@ async function main(prev) {
 
   const view = {
     updatedAt: new Date(now).toISOString(),
-    source: ETHERSCAN_KEY ? "Etherscan" : "Blockscout",
+    source: ETHERSCAN_KEY ? "Etherscan" : "serveurs publics Polygon",
     candidates: winners.length,
     wallets: winners
       .filter((x) => traced[x.wallet])
       .slice(0, 60)
-      .map((x) => {
+      .map(({ firstTrade, ...x }) => {
         const t = traced[x.wallet];
         const fs = (t.funders ?? []).map((f) => {
           const info = funders[f.address] ?? {};
@@ -205,7 +307,8 @@ async function main(prev) {
     `Pistes : ${winners.length} wallets récents gagnants, ${todo.length} examinés (${failures} en échec via ${view.source}), ${mains} compte principal probable, ${clusters.length} adresse(s) qui financent plusieurs suspects`
   );
   if (failures && failures === todo.length) console.log(`::warning::Explorateur Polygon injoignable : ${lastError}`);
-  return { state: { traced, funders, at: now }, view };
+  // Si tout a échoué, on réessaie au passage suivant sans attendre l'heure
+  return { state: { traced, funders, at: failures && failures === todo.length ? 0 : now }, view };
 }
 
 const prev = (await loadState("wallets")) ?? {};
