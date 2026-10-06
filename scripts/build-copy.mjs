@@ -11,8 +11,8 @@
 
 import { normalizeMarket } from "../site/js/normalize.js";
 import { parseTime } from "./backtest-lib.mjs";
-import { loadPrevious, readData, writeData } from "./lib.mjs";
-import { askPrices, fetchMarketsByCondition, paperStats, roiAt, settleBets } from "./paper.mjs";
+import { loadState, readData, writeState } from "./lib.mjs";
+import { askPrices, fetchMarketsByCondition, paperStats, pnlCurve, roiAt, settleBets } from "./paper.mjs";
 
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
@@ -95,6 +95,7 @@ async function main(prev, alerts) {
     hot: paperStats(settled.filter((b) => b.score >= 70), { seed: 9 }),
     warm: paperStats(settled.filter((b) => b.score < 70), { seed: 13 }),
     small: paperStats(settled.filter((b) => b.small), { seed: 17 }),
+    curve: pnlCurve(settled),
   };
   console.log(`${fresh.length} alertes à copier : ${added} paris fictifs, ${skipped} ignorées (marché fermé ou sans prix)`);
   console.log(`${summary.pending} en attente, ${summary.n ?? 0} réglés`);
@@ -106,20 +107,21 @@ async function main(prev, alerts) {
     );
   }
   bets.sort((a, b) => b.placedAt - a.placedAt);
-  return {
+  const base = {
     updatedAt: new Date(now).toISOString(),
     startedAt: prev.startedAt ?? new Date(now).toISOString(),
     rule: RULE,
     summary,
-    bets,
   };
+  return { state: { ...base, bets }, view: { ...base, bets: bets.slice(0, 30) } };
 }
 
-const prev = await loadPrevious("copy.json");
+const prev = await loadState("copy");
 try {
   const { alerts } = await readData("alerts.json");
-  await writeData("copy.json", await main(prev ?? {}, alerts ?? []));
+  const { state, view } = await main(prev ?? {}, alerts ?? []);
+  await writeState("copy", state, view);
 } catch (err) {
   console.log(`::warning::Test « copier les alertes » en échec : ${err.message}`);
-  if (prev) await writeData("copy.json", prev);
+  if (prev) await writeState("copy", prev, { ...prev, bets: (prev.bets ?? []).slice(0, 30) });
 }

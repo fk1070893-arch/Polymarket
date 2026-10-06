@@ -1949,3 +1949,152 @@ button {
     grid-template-columns: minmax(0, 1fr) 54px 42px 50px;
   }
 }
+
+/* ---------- Tableau de bord des stratégies ---------- */
+
+.flag.good {
+  background: var(--yes-soft);
+  color: var(--yes);
+}
+
+.dash {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.dash-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px 10px;
+  min-width: 0;
+}
+
+.dash-card header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dash-card h3 {
+  margin: 0;
+  font-size: 14.5px;
+}
+
+.dash-card h3 a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.dash-card h3 a:hover {
+  text-decoration: underline;
+}
+
+.dash-status {
+  align-self: flex-start;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.dash-status.good {
+  background: var(--yes-soft);
+  color: var(--text);
+}
+
+.dash-status.bad {
+  background: var(--no-soft);
+  color: var(--text);
+}
+
+.dash-nums {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 10px 0 4px;
+  font-size: 14px;
+}
+
+.dash-nums b {
+  font-size: 20px;
+}
+
+.dash-chart {
+  position: relative;
+  min-height: 90px;
+}
+
+.dash-chart .chart-empty {
+  min-height: 90px;
+  font-size: 12.5px;
+  text-align: center;
+}
+
+.dash-card > p:last-child {
+  margin: 4px 0 0;
+}
+
+.pnl {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.pnl-zero {
+  stroke: var(--border);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.pnl-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.pnl-end,
+.pnl-dot {
+  fill: var(--accent);
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+
+.pnl-cross {
+  stroke: var(--muted);
+  stroke-width: 1;
+}
+
+.pnl-hit {
+  fill: transparent;
+  cursor: crosshair;
+}
+
+.graveyard {
+  margin-top: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 16px;
+  font-size: 14px;
+}
+
+.graveyard summary {
+  cursor: pointer;
+}
+
+.graveyard ul {
+  margin: 10px 0 4px;
+  padding-left: 20px;
+}
+
+.graveyard li + li {
+  margin-top: 6px;
+}

@@ -190,3 +190,22 @@ test("probabilité de finir au-dessus de l'ouverture", () => {
   assert.ok(probUp(100, 99.9, 0.5, 30 / 525960) < 0.5);
   assert.equal(probUp(0, 100, 0.5, 1), null);
 });
+
+import { pnlCurve } from "./paper.mjs";
+
+test("courbe des gains cumulés", () => {
+  const bets = [
+    { won: true, roi: 2, resolvedAt: 3 },
+    { won: false, roi: -1, resolvedAt: 1 },
+    { won: null, roi: null },
+    { won: true, roi: null, resolvedAt: 2 }, // sans prix payé : ignoré
+  ];
+  assert.deepEqual(pnlCurve(bets), [
+    [1, -1, 1],
+    [3, 1, 2],
+  ]);
+  const many = Array.from({ length: 500 }, (_, i) => ({ won: true, roi: 1, resolvedAt: i }));
+  const c = pnlCurve(many, 50);
+  assert.equal(c.length, 50);
+  assert.deepEqual(c[c.length - 1], [499, 500, 500]);
+});

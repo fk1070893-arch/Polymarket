@@ -18,17 +18,30 @@
 // gardé à côté. Ces marchés n'ont jamais été vus par le backtest : c'est le
 // vrai test. Résultat : site/data/strategy.json
 //
+// Trois raffinements, suivis côte à côte sur les mêmes marchés :
+//  - deux moments : 24 h avant la fin (la règle du backtest) et 2-6 h avant
+//    (plus de volume, écart achat-vente plus serré) ;
+//  - un prix plafond : le backtest dit ce que vaut vraiment le « Non » d'un
+//    favori coté p (1 − fréquence réelle de victoire du favori) ; un pari
+//    « à bon prix » est un pari acheté au moins 3 ¢ sous cette valeur ;
+//  - l'avis des bookmakers (si la comparaison est active) : le favori
+//    est-il plus cher sur Polymarket que chez Pinnacle ?
+//
 // Usage : node scripts/build-strategy.mjs
 
 import { GAMMA } from "../site/js/api.js";
 import { normalizeMarket } from "../site/js/normalize.js";
 import { groupOf, parseTime } from "./backtest-lib.mjs";
-import { getJSON, loadPrevious, writeData } from "./lib.mjs";
-import { askPrices, paperStats, settleBets, spreadOf } from "./paper.mjs";
+import { getJSON, loadPrevious, loadState, writeState } from "./lib.mjs";
+import { askPrices, median, paperStats, pnlCurve, settleBets, spreadOf } from "./paper.mjs";
 
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
-const WINDOW = [20 * HOUR, 28 * HOUR]; // temps restant avant la fin prévue
+// Temps restant avant la fin prévue, pour chaque variante
+const WINDOWS = { "24h": [20 * HOUR, 28 * HOUR], "4h": [2 * HOUR, 6 * HOUR] };
+const MARGIN = 0.03; // prix plafond : au moins 3 ¢ sous la valeur estimée
+const OVERPRICED = 0.02; // favori plus cher que chez les bookmakers d'au moins 2 pts
+const BOOK_MAX_AGE = 6 * HOUR;
 const BAND = [0.6, 0.9]; // cote du favori (première issue)
 const MIN_VOLUME = 1000;
 const KEEP_FOR = 180 * DAY;
@@ -36,14 +49,15 @@ const NOISE = /\bup or down\b/i;
 
 const RULE = {
   description:
-    "Sport, deux issues, 24 h avant la fin prévue : si la première issue est cotée 60-90 %, 1 $ fictif sur l'autre issue. Résultat compté sur les marchés finis avec au moins 1 000 $ de volume, comme dans le backtest.",
+    "Sport, deux issues, 24 h (ou 2-6 h) avant la fin prévue : si la première issue est cotée 60-90 %, 1 $ fictif sur l'autre issue. « À bon prix » : seulement si on l'achète au moins 3 ¢ sous la valeur estimée par le backtest. Résultat compté sur les marchés finis avec au moins 1 000 $ de volume, comme dans le backtest.",
   band: BAND,
-  windowHours: [WINDOW[0] / HOUR, WINDOW[1] / HOUR],
+  margin: MARGIN,
   minVolume: MIN_VOLUME,
 };
 
 // Marchés sport qui se terminent dans la fenêtre
-async function candidates(now) {
+async function candidates(now, key) {
+  const WINDOW = WINDOWS[key];
   const out = [];
   // Décompte de chaque filtre, pour vérifier dans les logs que la règle
   // trouve bien des marchés
@@ -83,7 +97,7 @@ async function candidates(now) {
   }
   console.log(
     `Filtres : ${seen.events} événements, ${seen.sport} sport, ${seen.binary} marchés à deux issues, ` +
-      `${seen.volume} déjà à 1 000 $ de volume, ${seen.window} dans la fenêtre 20-28 h (${seen.quoted} avec un prix vendeur)`
+      `${seen.volume} déjà à 1 000 $ de volume, ${seen.window} dans la fenêtre ${key} (${seen.quoted} avec un prix vendeur)`
   );
   return out;
 }
@@ -101,7 +115,20 @@ function migrate(b) {
   return out;
 }
 
-function summarize(bets) {
+// Valeur du « Non » selon le backtest sport : 1 − fréquence réelle de
+// victoire des favoris de la même tranche de prix (tranches d'au moins 30
+// marchés seulement)
+function fairValues(backtest) {
+  const bins = backtest?.calibration?.byGroup?.sport?.bins ?? [];
+  return bins.filter((b) => b.n >= 30 && b.freq != null).map((b) => ({ lo: b.lo, hi: b.hi, fairNo: 1 - b.freq }));
+}
+
+function capFor(fair, p) {
+  const bin = fair.find((b) => p >= b.lo && p < b.hi);
+  return bin ? Math.round((bin.fairNo - MARGIN) * 1000) / 1000 : null;
+}
+
+function variantSummary(bets) {
   const settled = bets.filter((b) => b.won != null);
   // Même population que le backtest : volume final d'au moins 1 000 $
   const done = settled.filter((b) => (b.finalVolume ?? 0) >= MIN_VOLUME);
@@ -110,14 +137,21 @@ function summarize(bets) {
     [0.7, 0.8],
     [0.8, 0.9],
   ].map(([lo, hi]) => ({ lo, hi, ...paperStats(done.filter((b) => b.p >= lo && b.p < hi)) }));
-  const spreads = bets.map((b) => b.spread).filter((v) => v != null).sort((x, y) => x - y);
+  const withBook = done.filter((b) => b.book != null);
   return {
     ...paperStats(done),
+    total: bets.length,
     pending: bets.length - settled.length,
     lowVolume: settled.length - done.length,
     all: paperStats(settled),
     bands,
-    medianSpread: spreads.length ? spreads[Math.floor(spreads.length / 2)] : null,
+    value: { ...paperStats(done.filter((b) => b.value), { seed: 31 }), total: bets.filter((b) => b.value).length },
+    overpriced: paperStats(withBook.filter((b) => b.overpriced), { seed: 37 }),
+    fairlyPriced: paperStats(withBook.filter((b) => !b.overpriced), { seed: 41 }),
+    withBook: bets.filter((b) => b.book != null).length,
+    medianSpread: median(bets.map((b) => b.spread).filter((v) => v != null)),
+    curve: pnlCurve(done),
+    valueCurve: pnlCurve(done.filter((b) => b.value)),
   };
 }
 
@@ -125,63 +159,86 @@ async function main(prev) {
   const now = Date.now();
   const bets = (prev.bets ?? []).filter((b) => now - b.placedAt < KEEP_FOR).map(migrate);
   const known = new Set(bets.map((b) => b.id));
+  const fair = fairValues(await loadPrevious("backtest.json"));
+  // Probabilités des bookmakers, publiées par build-odds.mjs au passage précédent
+  const book = (await loadPrevious("odds.json"))?.bookByMarket ?? {};
+  console.log(`Prix plafond : ${fair.length ? fair.map((b) => `${Math.round(b.lo * 100)}-${Math.round(b.hi * 100)}% → Non vaut ${Math.round(b.fairNo * 100)} ¢`).join(", ") : "backtest indisponible"}`);
 
-  let added = 0;
-  for (const { ev, raw, m, end } of await candidates(now)) {
-    if (known.has(m.id)) continue;
-    const p = m.prices[0];
-    if (!(p >= BAND[0] && p <= BAND[1])) continue;
-    const cost = askPrices(raw)[1];
-    bets.push({
-      id: m.id,
-      event: String(ev.id),
-      slug: ev.slug ?? "",
-      eventTitle: ev.title ?? "",
-      question: m.question,
-      favorite: m.outcomes[0],
-      bet: m.outcomes[1],
-      p,
-      side: 1,
-      mid: 1 - p,
-      // Prix réellement payé pour l'autre issue (null si pas d'offre)
-      cost,
-      spread: spreadOf(raw),
-      volume: Math.round(m.volume),
-      end,
-      placedAt: now,
-      won: null,
-      roi: null,
-    });
-    known.add(m.id);
-    added++;
+  const added = {};
+  for (const key of Object.keys(WINDOWS)) {
+    added[key] = 0;
+    for (const { ev, raw, m, end } of await candidates(now, key)) {
+      // Les paris de la règle d'origine gardent l'identifiant du marché
+      const id = key === "24h" ? m.id : `${m.id}:${key}`;
+      if (known.has(id)) continue;
+      const p = m.prices[0];
+      if (!(p >= BAND[0] && p <= BAND[1])) continue;
+      const cost = askPrices(raw)[1];
+      const cap = capFor(fair, p);
+      const b = book[m.id];
+      const bookP = b && now - b[2] < BOOK_MAX_AGE ? b[0] : null;
+      bets.push({
+        id,
+        marketId: m.id,
+        when: key,
+        event: String(ev.id),
+        slug: ev.slug ?? "",
+        eventTitle: ev.title ?? "",
+        question: m.question,
+        favorite: m.outcomes[0],
+        bet: m.outcomes[1],
+        p,
+        side: 1,
+        mid: 1 - p,
+        // Prix réellement payé pour l'autre issue (null si pas d'offre)
+        cost,
+        cap,
+        value: cost != null && cap != null && cost <= cap,
+        book: bookP,
+        overpriced: bookP != null ? p - bookP >= OVERPRICED : null,
+        spread: spreadOf(raw),
+        volume: Math.round(m.volume),
+        end,
+        placedAt: now,
+        won: null,
+        roi: null,
+      });
+      known.add(id);
+      added[key]++;
+    }
   }
   await settleBets(bets, now);
-  const summary = summarize(bets);
-  console.log(`${added} nouveaux paris fictifs, ${summary.pending} en attente, ${summary.n} réglés`);
-  if (summary.n) {
-    const p = (v) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${Math.round(v * 100)}%`);
+
+  const variants = {};
+  for (const key of Object.keys(WINDOWS)) variants[key] = variantSummary(bets.filter((b) => (b.when ?? "24h") === key));
+  const pc = (v) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${Math.round(v * 100)}%`);
+  for (const [key, v] of Object.entries(variants)) {
     console.log(
-      `Résultat : ${summary.wins}/${summary.n} gagnés (attendu ${Math.round(summary.expectedWinRate * 100)}%), ` +
-        `gain/pari au prix payé ${p(summary.roi)}${summary.ci ? ` [${p(summary.ci[0])} ; ${p(summary.ci[1])}]` : ""} (${summary.nExec} paris), ` +
-        `au prix affiché ${p(summary.roiMid)}`
+      `[${key}] ${added[key]} nouveaux paris, ${v.pending} en attente, ${v.n ?? 0} réglés, gain/pari ${pc(v.roi)} ; ` +
+        `à bon prix : ${v.value.total} paris, ${v.value.n ?? 0} réglés, ${pc(v.value.roi)} ; ` +
+        `écart médian ${v.medianSpread == null ? "—" : (v.medianSpread * 100).toFixed(1) + " pts"} ; avec cotes bookmakers : ${v.withBook}`
     );
   }
-  if (summary.medianSpread != null) console.log(`Écart achat-vente médian à l'entrée : ${(summary.medianSpread * 100).toFixed(1)} pts`);
+
   bets.sort((a, b) => b.placedAt - a.placedAt);
-  return {
+  const base = {
     updatedAt: new Date(now).toISOString(),
     startedAt: prev.startedAt ?? new Date(now).toISOString(),
     rule: RULE,
-    summary,
-    bets,
+    fair,
+    // La règle d'origine reste le résumé principal
+    summary: variants["24h"],
+    variants,
   };
+  return { state: { ...base, bets }, view: { ...base, bets: bets.slice(0, 30) } };
 }
 
-const prev = await loadPrevious("strategy.json");
+const prev = await loadState("strategy");
 try {
-  await writeData("strategy.json", await main(prev ?? {}));
+  const { state, view } = await main(prev ?? {});
+  await writeState("strategy", state, view);
 } catch (err) {
   // Ne jamais perdre les paris déjà enregistrés
   console.log(`::warning::Test de la stratégie en échec : ${err.message}`);
-  if (prev) await writeData("strategy.json", prev);
+  if (prev) await writeState("strategy", prev, { ...prev, bets: (prev.bets ?? []).slice(0, 30) });
 }

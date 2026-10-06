@@ -97,6 +97,17 @@ jobs:
           PAGES_URL: ${{ steps.pages.outputs.base_url }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
 
+      # Secrets TELEGRAM_BOT_TOKEN et TELEGRAM_CHAT_ID (jamais affichés) ;
+      # sans eux, l'étape ne fait rien
+      - name: Alertes Telegram
+        run: node scripts/build-notify.mjs
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          PAGES_URL: ${{ steps.pages.outputs.base_url }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
       # Recalculé au plus une fois par jour (ou à la demande), sinon republié tel quel
       - name: Backtest sur les marchés terminés
         run: node scripts/build-backtest.mjs

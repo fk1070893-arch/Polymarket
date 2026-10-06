@@ -60,3 +60,15 @@ export async function writeData(name, data) {
 }
 
 export const nowSec = () => Math.floor(Date.now() / 1000);
+
+// État complet d'un test en direct (tous les paris, caches…), publié à part
+// pour que la page n'ait à charger que le résumé. Repli sur l'ancien fichier
+// unique pour reprendre les tests lancés avant la séparation.
+export async function loadState(name) {
+  return (await loadPrevious(`${name}-state.json`)) ?? (await loadPrevious(`${name}.json`)) ?? null;
+}
+
+export async function writeState(name, state, view) {
+  await writeData(`${name}-state.json`, state);
+  await writeData(`${name}.json`, view);
+}

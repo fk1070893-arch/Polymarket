@@ -388,6 +388,11 @@ function onRoute() {
   if (view !== state.view) {
     state.view = view;
     window.scrollTo({ top: 0 });
+    if (view === "strategies" && state.strategy === null) {
+      refreshStrategy().then(() => {
+        if (state.view === "strategies" && !$("detail").open) renderView();
+      });
+    }
   }
   if (!slug && $("detail").open) $("detail").close(); // lien vers un onglet depuis une fiche
   renderView();
@@ -812,7 +817,8 @@ async function refresh({ initial = false } = {}) {
       refreshAlerts(),
       refreshCrypto(),
       refreshBacktest(),
-      refreshStrategy(),
+      // Les tests en direct ne sont chargés que si leur onglet est ouvert
+      state.view === "strategies" ? refreshStrategy() : null,
     ]);
     Object.assign(state, data);
     mergeCryptoEvents();

@@ -17,9 +17,9 @@
 import { GAMMA } from "../site/js/api.js";
 import { normalizeMarket } from "../site/js/normalize.js";
 import { parseTime } from "./backtest-lib.mjs";
-import { getJSON, loadPrevious, writeData } from "./lib.mjs";
+import { getJSON, loadState, writeState } from "./lib.mjs";
 import { gameProbs, marketTargets, sameGame, sideProbs } from "./odds-lib.mjs";
-import { askPrices, paperStats, settleBets } from "./paper.mjs";
+import { askPrices, paperStats, pnlCurve, settleBets } from "./paper.mjs";
 
 const ODDS = "https://api.the-odds-api.com/v4";
 // Un espace ou un retour à la ligne collé avec la clé la ferait refuser
@@ -266,12 +266,22 @@ async function main(prev) {
     ...paperStats(bets),
     pending: bets.filter((b) => b.won == null).length,
     accuracy: scored.length ? { n: scored.length, book: brier("book"), poly: brier("mid") } : { n: 0 },
+    curve: pnlCurve(bets),
   };
+
+  // Probabilité bookmaker de chaque marché comparable, pour les autres
+  // stratégies (ex. : le favori est-il plus cher sur Polymarket ?) :
+  // { marketId: [proba issue 0, proba issue 1, date des cotes] }
+  const bookByMarket = {};
+  for (const r of rows) {
+    const e = (bookByMarket[r.marketId] ??= [null, null, now - r.oddsAge]);
+    e[r.side] = Math.round(r.book * 1000) / 1000;
+  }
   if (summary.n) console.log(`Paris réglés : ${summary.n}, gain/pari ${Math.round(summary.roi * 100)}%`);
   if (summary.accuracy.n) console.log(`Précision sur ${summary.accuracy.n} marchés : Brier bookmakers ${summary.accuracy.book.toFixed(3)} / Polymarket ${summary.accuracy.poly.toFixed(3)}`);
 
   bets.sort((a, b) => b.placedAt - a.placedAt);
-  return {
+  const base = {
     updatedAt: new Date(now).toISOString(),
     startedAt: prev.startedAt ?? (KEY ? new Date(now).toISOString() : null),
     enabled: Boolean(KEY),
@@ -281,18 +291,18 @@ async function main(prev) {
       minEdge: MIN_EDGE,
     },
     quota: state.quota,
-    rows: rows.filter((r) => r.edge != null).sort((a, b) => b.edge - a.edge).slice(0, 200),
+    rows: rows.filter((r) => r.edge != null).sort((a, b) => b.edge - a.edge).slice(0, 100),
+    bookByMarket,
     summary,
-    bets,
-    track,
-    state,
   };
+  return { state: { ...base, bets, track, state }, view: { ...base, bets: bets.slice(0, 30) } };
 }
 
-const prev = await loadPrevious("odds.json");
+const prev = await loadState("odds");
 try {
-  await writeData("odds.json", await main(prev ?? {}));
+  const { state, view } = await main(prev ?? {});
+  await writeState("odds", state, view);
 } catch (err) {
   console.log(`::warning::Comparaison bookmakers en échec : ${err.message}`);
-  if (prev) await writeData("odds.json", prev);
+  if (prev) await writeState("odds", prev, { ...prev, bets: (prev.bets ?? []).slice(0, 30), track: undefined, state: undefined });
 }

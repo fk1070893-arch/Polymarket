@@ -122,3 +122,21 @@ export function paperStats(bets, { seed = 5 } = {}) {
     ciMid: bootstrapCI(md, (b) => b.roiMid, { seed: seed + 1 }),
   };
 }
+
+// Courbe des gains cumulés (1 $ par pari, au prix payé), dans l'ordre des
+// règlements, réduite à `max` points : [[date, gain cumulé, paris], …]
+export function pnlCurve(bets, max = 120) {
+  const xs = bets.filter((b) => b.won != null && Number.isFinite(b.roi) && b.resolvedAt).sort((a, b) => a.resolvedAt - b.resolvedAt);
+  const pts = [];
+  let cum = 0;
+  xs.forEach((b, i) => {
+    cum += b.roi;
+    pts.push([b.resolvedAt, Math.round(cum * 100) / 100, i + 1]);
+  });
+  if (pts.length <= max) return pts;
+  const step = pts.length / max;
+  const out = [];
+  for (let i = 0; i < max - 1; i++) out.push(pts[Math.floor(i * step)]);
+  out.push(pts[pts.length - 1]);
+  return out;
+}

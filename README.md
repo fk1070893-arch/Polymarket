@@ -51,14 +51,28 @@ Tous les prix sont pris 24 h avant la fin (aucune information future), et chaque
 
 L'onglet **Stratégies** met les idées à l'épreuve sur les marchés en cours, que le backtest n'a jamais vus. Chaque pari est fictif (1 $), enregistré au **prix réellement payé** (meilleur prix vendeur du moment, pas le prix affiché), puis réglé à la clôture ; le gain au prix affiché est gardé à côté pour comparer. Il faut 50 à 100 paris réglés avant de conclure.
 
-- **Contre les favoris sport** (`scripts/build-strategy.mjs`) : marchés sport à deux issues, 24 h (± 4 h) avant la fin prévue, première issue cotée 60-90 % → 1 $ sur l'autre. Résultat principal sur les marchés finis avec au moins 1 000 $ de volume, comme dans le backtest.
+- **Contre les favoris sport** (`scripts/build-strategy.mjs`) : marchés sport à deux issues, première issue cotée 60-90 % → 1 $ sur l'autre. Résultat principal sur les marchés finis avec au moins 1 000 $ de volume, comme dans le backtest. Trois variantes suivies côte à côte : **le moment** (24 h ou 2-6 h avant la fin), **un prix plafond** (« à bon prix » : « Non » acheté au moins 3 ¢ sous sa valeur d'après le backtest sport) et **l'avis des bookmakers** (le favori est-il plus cher sur Polymarket que chez Pinnacle ?).
 - **Copier les paris suspects** (`scripts/build-copy.mjs`) : à chaque alerte de score 50+, 1 $ sur la même issue au prix du moment où le site la voit. Le prix payé par le wallet suspect est noté pour mesurer ce que coûte le temps de réaction.
 - **Sport contre bookmakers** (`scripts/build-odds.mjs`) : les cotes des bookmakers (Pinnacle en priorité, via The Odds API), sans leur marge, comparées au prix d'achat Polymarket. Écart d'au moins 3 pts dans les 24 h avant le match → 1 $ fictif. La précision des deux (score de Brier) est aussi suivie. **Activation :** créer une clé gratuite sur the-odds-api.com, puis l'ajouter au dépôt dans *Settings → Secrets and variables → Actions → New repository secret*, nom `ODDS_API_KEY`. La clé n'apparaît jamais dans le code, les logs ou le site ; le quota gratuit (500 requêtes / mois) est réparti automatiquement sur le mois.
 - **Contre les marchés tout neufs** (`scripts/build-fresh.mjs`) : le backtest trouve que les marchés affichés 40-60 % six heures après leur ouverture se réalisent bien moins souvent. Soupçon de prix « fantôme » (50 % par défaut faute d'échanges) : le test note le vrai prix de vente du « Non » dans le carnet d'ordres. **Verdict dès le premier passage : prix fantôme** (sur 3 483 marchés, aucun vendeur pour 1 068, et un « Non » à 99 ¢ en médiane pour les autres). Le test continue seulement sur les marchés où le « Non » se vend vraiment 70 ¢ ou moins.
 - **Anomalies de prix** (`scripts/build-arbs.mjs`) : dans les événements où une seule issue peut gagner, les « Oui » doivent valoir 100 % au total. Si la somme s'en écarte, acheter toutes les issues (ou tous les « Non ») rapporte un gain sûr ; le site vérifie dans les carnets d'ordres combien on aurait vraiment pu acheter.
 
+En haut de l'onglet, un **tableau de bord** résume chaque stratégie : statut (en test, prometteuse, rejetée), gain par pari et courbe des gains cumulés. Les idées abandonnées sont listées à part, avec la raison.
+
+### Alertes Telegram (facultatif)
+
+`scripts/build-notify.mjs` envoie un message Telegram à chaque nouveau pari fictif intéressant (favori « à bon prix », écart avec les bookmakers, pari suspect de score 70+, anomalie de prix). Pour l'activer :
+
+1. Dans Telegram, écrire à **@BotFather**, envoyer `/newbot`, choisir un nom : il donne un **jeton** (token).
+2. Écrire à **@userinfobot** : il répond avec ton **identifiant** (un nombre).
+3. Envoyer un premier message (n'importe lequel) à ton nouveau bot, sinon il n'a pas le droit de t'écrire.
+4. Dans le dépôt GitHub : *Settings → Secrets and variables → Actions*, ajouter `TELEGRAM_BOT_TOKEN` (le jeton) et `TELEGRAM_CHAT_ID` (l'identifiant).
+
+Le jeton et l'identifiant restent privés : ils n'apparaissent ni dans le code, ni dans les logs, ni sur le site.
+
 ### Études de niche (onglet Backtest)
 
+- **Sport, moment du pari** : le biais sur les favoris rejoué 24 h, 6 h et 2 h avant la fin.
 - **« Avant telle date »** : marchés « X arrivera-t-il avant le … ? », calibrés 7, 3 et 1 jour avant l'échéance (le « Oui » garde-t-il un prix d'espoir ?).
 - **Marchés tout neufs** : calibration 6 h et 24 h après l'ouverture, quand il y a encore peu de traders.
 - **Crypto « Up or Down »** (15 min et 1 h) : à mi-fenêtre, probabilité de finir en hausse calculée à partir du prix d'ouverture, du prix du moment (bougies minute Deribit) et de la volatilité DVOL, comparée au prix Polymarket.
@@ -114,6 +128,8 @@ npm run strategy   # test en direct : contre les favoris sport
 npm run copy       # test en direct : copier les alertes (après alerts)
 npm run arbs       # anomalies de prix
 npm run odds       # bookmakers (ODDS_API_KEY=... pour activer)
+npm run fresh      # test en direct : marchés tout neufs
+npm run notify     # alertes Telegram (TELEGRAM_BOT_TOKEN=... TELEGRAM_CHAT_ID=...)
 npm test           # tests unitaires
 npm start          # sert le dossier site/ sur http://localhost:3000
 ```
@@ -143,6 +159,8 @@ npm start          # sert le dossier site/ sur http://localhost:3000
 | `scripts/build-strategy.mjs` | Contre les favoris sport → `strategy.json` |
 | `scripts/build-copy.mjs` | Copier les alertes → `copy.json` |
 | `scripts/build-fresh.mjs` | Contre les marchés tout neufs → `fresh.json` |
+| `scripts/build-notify.mjs` | Alertes Telegram |
+| `scripts/lib.mjs` | Outils communs ; chaque test en direct publie un résumé léger (`x.json`, lu par la page) et son état complet (`x-state.json`, relu par le script) |
 | `scripts/odds-lib.mjs`, `scripts/build-odds.mjs` | Bookmakers → `odds.json` |
 | `scripts/arb-lib.mjs`, `scripts/build-arbs.mjs` | Anomalies de prix → `arbs.json` |
 | `.github/workflows/pages.yml` | Instantané + déploiement toutes les 5 min |

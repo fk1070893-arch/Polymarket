@@ -10,7 +10,7 @@ const MIN_ROI = 0.05;
 const VOLUME_LABELS = { "<10k": "Moins de 10 k$", "10k-100k": "10 k$ – 100 k$", "100k-1M": "100 k$ – 1 M$", ">1M": "Plus de 1 M$" };
 
 // Un seul segment à la fois : une catégorie OU une tranche de volume
-const filter = { group: "all", volume: "all", deadline: "7d", fresh: "6h" };
+const filter = { group: "all", volume: "all", deadline: "7d", fresh: "6h", sportTiming: "24h" };
 let bound = false;
 const $ = (id) => document.getElementById(id);
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -470,7 +470,16 @@ export function renderBacktest(ctx) {
     </section>
 
     <section class="verdict">
-      <h2>3. Les « avant telle date » fondent-ils ?</h2>
+      <h2>3. Sport : parier 24 h, 6 h ou 2 h avant ?</h2>
+      ${horizonSection(
+        data.sportTiming,
+        "sportTiming",
+        "Le biais sur les favoris sport (tranches 60-90 %) existe-t-il encore près du match, quand il y a plus de volume et un écart achat-vente plus serré ? Mêmes marchés, pris à trois moments."
+      )}
+    </section>
+
+    <section class="verdict">
+      <h2>4. Les « avant telle date » fondent-ils ?</h2>
       ${horizonSection(
         data.deadline,
         "deadline",
@@ -479,7 +488,7 @@ export function renderBacktest(ctx) {
     </section>
 
     <section class="verdict">
-      <h2>4. Les marchés tout neufs sont-ils mal cotés ?</h2>
+      <h2>5. Les marchés tout neufs sont-ils mal cotés ?</h2>
       ${horizonSection(
         data.fresh,
         "fresh",
@@ -488,7 +497,7 @@ export function renderBacktest(ctx) {
     </section>
 
     <section class="verdict">
-      <h2>5. Crypto « Up or Down » : calculable ?</h2>
+      <h2>6. Crypto « Up or Down » : calculable ?</h2>
       ${updownSection(data.updown)}
     </section>
 

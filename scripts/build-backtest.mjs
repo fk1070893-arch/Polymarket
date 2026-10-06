@@ -371,6 +371,18 @@ async function deadlineStudy(spreads) {
   ], spreads);
 }
 
+// Sport : le biais sur les favoris existe-t-il encore près du match, quand
+// le volume est plus gros et l'écart achat-vente plus serré ?
+async function sportTimingStudy(spreads) {
+  const markets = resolvedMarkets(calibEvents).filter((m) => m.volume >= MIN_VOLUME && m.group === "sport");
+  console.log(`Sport (moment du pari) : ${markets.length} marchés`);
+  return horizonStudy("Sport", markets, [
+    { key: "24h", label: "24 h avant", t0: (m) => m.end - DAY },
+    { key: "6h", label: "6 h avant", t0: (m) => m.end - 6 * HOUR },
+    { key: "2h", label: "2 h avant", t0: (m) => m.end - 2 * HOUR },
+  ], spreads);
+}
+
 // Marchés tout neufs : 6 h et 24 h après leur création
 async function newMarketStudy(spreads) {
   const markets = resolvedMarkets(calibEvents).filter((m) => m.volume >= MIN_VOLUME && m.start && m.end - m.start >= 3 * DAY);
@@ -496,7 +508,7 @@ function logSummary(calib, crypto, niche = {}) {
     for (const [k, r] of Object.entries(crypto.byKind ?? {}))
       console.log(`  ${k} : n=${r.n} (${r.events} év.) Brier modèle ${r.brierModel.toFixed(3)} / Polymarket ${r.brierPoly.toFixed(3)}, signaux ${r.signals.all.bets}, gain/pari ${p(r.signals.all.roi)} ${ci(r.signals.all.ci)} (A ${p(r.signals.A.roi)} / B ${p(r.signals.B.roi)})`);
   }
-  for (const [name, study] of [["Échéances", niche.deadline], ["Marchés neufs", niche.fresh]]) {
+  for (const [name, study] of [["Sport", niche.sportTiming], ["Échéances", niche.deadline], ["Marchés neufs", niche.fresh]]) {
     for (const [k, r] of Object.entries(study ?? {})) console.log(`\n=== ${name} ${k} (${r.n} marchés, ${r.events} événements, Brier ${r.brier.toFixed(3)}) ===\n${rows(r.bins)}`);
   }
   const ud = niche.updown;
@@ -525,7 +537,7 @@ if (prev && !force && age < REFRESH_EVERY) {
     const crypto = outOfTime() ? null : await cryptoStudy(spreads);
     // Études de niche : chacune peut échouer sans faire tomber le reste
     const niche = {};
-    for (const [k, fn] of [["deadline", deadlineStudy], ["fresh", newMarketStudy], ["updown", updownStudy]]) {
+    for (const [k, fn] of [["sportTiming", sportTimingStudy], ["deadline", deadlineStudy], ["fresh", newMarketStudy], ["updown", updownStudy]]) {
       if (outOfTime()) break;
       niche[k] = await fn(spreads).catch((err) => {
         console.log(`::warning::Étude ${k} en échec : ${err.message}`);

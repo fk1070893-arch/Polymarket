@@ -13,8 +13,8 @@
 import { GAMMA } from "../site/js/api.js";
 import { normalizeMarket } from "../site/js/normalize.js";
 import { parseTime } from "./backtest-lib.mjs";
-import { getJSON, loadPrevious, writeData } from "./lib.mjs";
-import { askPrices, paperStats, settleBets, spreadOf } from "./paper.mjs";
+import { getJSON, loadState, writeState } from "./lib.mjs";
+import { askPrices, paperStats, pnlCurve, settleBets, spreadOf } from "./paper.mjs";
 
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
@@ -183,25 +183,25 @@ async function main(prev) {
     single: paperStats(done.filter((b) => !b.multi), { seed: 23 }),
     total,
     counts: COST_BUCKETS.map((x) => ({ ...x, max: undefined, n: counts[x.key] })),
+    curve: pnlCurve(done),
   };
   console.log(`${bets.length} paris (${summary.pending} en attente, ${summary.n ?? 0} réglés)`);
 
   bets.sort((a, b) => b.placedAt - a.placedAt);
-  return {
+  const base = {
     updatedAt: new Date(now).toISOString(),
     startedAt: prev.startedAt ?? new Date(now).toISOString(),
     rule: RULE,
     summary,
-    bets,
-    counts,
-    seenIds,
   };
+  return { state: { ...base, bets, counts, seenIds }, view: { ...base, bets: bets.slice(0, 30) } };
 }
 
-const prev = await loadPrevious("fresh.json");
+const prev = await loadState("fresh");
 try {
-  await writeData("fresh.json", await main(prev ?? {}));
+  const { state, view } = await main(prev ?? {});
+  await writeState("fresh", state, view);
 } catch (err) {
   console.log(`::warning::Test « marchés neufs » en échec : ${err.message}`);
-  if (prev) await writeData("fresh.json", prev);
+  if (prev) await writeState("fresh", prev, { ...prev, bets: (prev.bets ?? []).slice(0, 30), seenIds: undefined });
 }

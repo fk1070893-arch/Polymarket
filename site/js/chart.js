@@ -145,3 +145,69 @@ export function lineChart(container, points, { interval = "1w" } = {}) {
   svg.addEventListener("pointerleave", onLeave);
   container.append(svg, tip);
 }
+
+// Gains cumulés d'une stratégie (1 $ par pari) : une courbe, la ligne du
+// zéro, et une bulle au survol. curve = [[date, gain cumulé, paris], …]
+export function pnlChart(container, curve, { height = 90 } = {}) {
+  container.replaceChildren();
+  if (!curve || curve.length < 2) {
+    const empty = document.createElement("p");
+    empty.className = "chart-empty small";
+    empty.textContent = "La courbe apparaît après quelques paris réglés.";
+    container.append(empty);
+    return;
+  }
+  const W = Math.max(220, container.clientWidth || 300);
+  const H = height;
+  const m = { top: 8, right: 6, bottom: 8, left: 6 };
+  const vals = curve.map((c) => c[1]);
+  const lo = Math.min(0, ...vals);
+  const hi = Math.max(0, ...vals);
+  const span = hi - lo || 1;
+  const x = (i) => m.left + (i / (curve.length - 1)) * (W - m.left - m.right);
+  const y = (v) => m.top + (1 - (v - lo) / span) * (H - m.top - m.bottom);
+
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, class: "pnl", role: "img" });
+  svg.setAttribute("aria-label", `Gains cumulés : ${vals[vals.length - 1] >= 0 ? "+" : ""}${vals[vals.length - 1].toFixed(2)} $ après ${curve[curve.length - 1][2]} paris`);
+  svg.append(el("line", { x1: m.left, x2: W - m.right, y1: y(0), y2: y(0), class: "pnl-zero" }));
+  const d = curve.map((c, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(c[1]).toFixed(1)}`).join("");
+  svg.append(el("path", { d, class: "pnl-line" }));
+  const last = curve.length - 1;
+  svg.append(el("circle", { cx: x(last), cy: y(vals[last]), r: 4, class: "pnl-end" }));
+
+  const cross = el("line", { y1: m.top, y2: H - m.bottom, class: "pnl-cross", visibility: "hidden" });
+  const dot = el("circle", { r: 4, class: "pnl-dot", visibility: "hidden" });
+  svg.append(cross, dot);
+  const hit = el("rect", { x: 0, y: 0, width: W, height: H, class: "pnl-hit" });
+  svg.append(hit);
+
+  const tip = document.createElement("div");
+  tip.className = "chart-tip";
+  tip.hidden = true;
+  const dateFmt = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "short" });
+  const show = (clientX) => {
+    const r = svg.getBoundingClientRect();
+    const px = ((clientX - r.left) / r.width) * W;
+    const i = Math.max(0, Math.min(last, Math.round(((px - m.left) / (W - m.left - m.right)) * last)));
+    const c = curve[i];
+    cross.setAttribute("x1", x(i));
+    cross.setAttribute("x2", x(i));
+    dot.setAttribute("cx", x(i));
+    dot.setAttribute("cy", y(c[1]));
+    cross.setAttribute("visibility", "visible");
+    dot.setAttribute("visibility", "visible");
+    tip.hidden = false;
+    tip.innerHTML = `<strong>${c[1] >= 0 ? "+" : "−"}${Math.abs(c[1]).toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $</strong><span>après ${c[2]} pari${c[2] > 1 ? "s" : ""} · ${dateFmt.format(new Date(c[0]))}</span>`;
+    const half = tip.offsetWidth / 2 + 4;
+    tip.style.left = `${Math.min(Math.max((x(i) / W) * r.width, half), r.width - half)}px`;
+    tip.style.top = `${(y(c[1]) / H) * r.height}px`;
+  };
+  const hide = () => {
+    tip.hidden = true;
+    cross.setAttribute("visibility", "hidden");
+    dot.setAttribute("visibility", "hidden");
+  };
+  hit.addEventListener("pointermove", (e) => show(e.clientX));
+  hit.addEventListener("pointerleave", hide);
+  container.append(svg, tip);
+}
