@@ -107,42 +107,88 @@ async function blockAt(ts) {
   return guess;
 }
 
-// Dollars reçus par une adresse entre deux instants (ms), lus bloc par bloc
-// dans les journaux de la blockchain
-async function rpcTransfers(address, fromMs, toMs) {
+// Journaux de la blockchain entre deux instants (ms) pour un filtre donné.
+// La plage de blocs par requête grandit tant que le serveur l'accepte, et se
+// réduit s'il la refuse : peu de requêtes même sur plusieurs semaines.
+let step = 20000;
+async function scanLogs(filter, fromMs, toMs) {
   const from = await blockAt(Math.floor(fromMs / 1000));
   const to = Math.min((await latestBlock()).number, await blockAt(Math.floor(toMs / 1000)));
-  const h = await latestBlock();
-  const topic = `0x${"0".repeat(24)}${address.slice(2)}`;
   const out = [];
-  let step = 10000;
   for (let start = from; start <= to; ) {
     const end = Math.min(to, start + step - 1);
     let logs;
     try {
-      logs = await rpc("eth_getLogs", [{ fromBlock: `0x${start.toString(16)}`, toBlock: `0x${end.toString(16)}`, address: [...USDC], topics: [TRANSFER, null, topic] }]);
+      logs = await rpc("eth_getLogs", [{ ...filter, fromBlock: `0x${start.toString(16)}`, toBlock: `0x${end.toString(16)}` }]);
     } catch (err) {
-      if (err.rpcError && step > 500) {
-        step = Math.floor(step / 4);
+      // Plage refusée ou trop lente (délai dépassé) : on la réduit
+      if (step > 500) {
+        step = Math.max(500, Math.floor(step / 4));
         continue;
       }
       throw err;
     }
-    for (const l of logs ?? []) {
-      const bn = parseInt(l.blockNumber, 16);
-      out.push({
-        from: `0x${l.topics[1].slice(26)}`,
-        to: address,
-        value: BigInt(l.data).toString(),
-        tokenDecimal: "6",
-        contractAddress: l.address,
-        timeStamp: String(Math.round(h.ts - (h.number - bn) * BLOCK_TIME)),
-        hash: l.transactionHash,
-      });
-    }
+    out.push(...(logs ?? []));
     start = end + 1;
+    if (step < 200000) step = Math.min(200000, step * 2);
+  }
+  return out;
+}
+
+const topicOf = (address) => `0x${"0".repeat(24)}${address.slice(2)}`;
+const addrOf = (topic) => `0x${topic.slice(26)}`;
+async function tsOf(blockHex) {
+  const h = await latestBlock();
+  return Math.round(h.ts - (h.number - parseInt(blockHex, 16)) * BLOCK_TIME);
+}
+
+// Dollars reçus par une adresse entre deux instants (ms)
+async function rpcTransfers(address, fromMs, toMs) {
+  const logs = await scanLogs({ address: [...USDC], topics: [TRANSFER, null, topicOf(address)] }, fromMs, toMs);
+  const out = [];
+  for (const l of logs) {
+    out.push({
+      from: addrOf(l.topics[1]),
+      to: address,
+      value: BigInt(l.data).toString(),
+      tokenDecimal: "6",
+      contractAddress: l.address,
+      timeStamp: String(await tsOf(l.blockNumber)),
+      hash: l.transactionHash,
+    });
   }
   return out.sort((a, b) => Number(a.timeStamp) - Number(b.timeStamp));
+}
+
+// Parts de pari envoyées directement par un autre wallet (pas un échange
+// sur Polymarket, où c'est le contrat de Polymarket qui fait le transfert)
+const CTF = "0x4d97dcd97ec945f40cf65f87097ace5ea0476045";
+const TRANSFER_SINGLE = "0xc3d58168c5ae7397731d063d5bbf3d657854427343f4c083240f7aacaa2d0f62";
+const TRANSFER_BATCH = "0x4a39dc06d4c0dbc64b70af90fd698a233a518aa5d07e595d983b8c0526c8f7fb";
+async function sharesReceived(address, fromMs, toMs) {
+  const logs = await scanLogs({ address: CTF, topics: [[TRANSFER_SINGLE, TRANSFER_BATCH], null, null, topicOf(address)] }, fromMs, toMs);
+  const out = [];
+  for (const l of logs) {
+    const operator = addrOf(l.topics[1]);
+    const from = addrOf(l.topics[2]);
+    // Envoyées par leur propriétaire lui-même, pas par un contrat d'échange
+    if (operator !== from || /^0x0+$/.test(from) || POLYMARKET_CONTRACTS.has(operator)) continue;
+    // Quantité : 2e mot des données pour TransferSingle (id, valeur), en parts de 1 $
+    const value = l.topics[0] === TRANSFER_SINGLE ? Number(BigInt(`0x${l.data.slice(66, 130)}`)) / 1e6 : 0;
+    out.push({ from, value, ts: (await tsOf(l.blockNumber)) * 1000, hash: l.transactionHash });
+  }
+  return out;
+}
+
+// Propriétaire d'un wallet Polymarket de type « Safe » (le wallet qui signe
+// ses ordres) : fonction getOwners() du contrat
+async function safeOwner(address) {
+  const data = await rpc("eth_call", [{ to: address, data: "0xa0e67e2b" }, "latest"]).catch(() => null);
+  // Réponse : position, longueur, puis les adresses (32 octets chacune)
+  if (typeof data !== "string" || data.length < 2 + 64 * 3) return null;
+  const n = parseInt(data.slice(2 + 64, 2 + 128), 16);
+  if (!(n >= 1 && n <= 10)) return null;
+  return `0x${data.slice(2 + 128 + 24, 2 + 192)}`.toLowerCase();
 }
 
 // Premiers transferts de dollars reçus par une adresse (du plus ancien au plus récent)
@@ -219,25 +265,35 @@ async function describe(address) {
 }
 
 // Qui a envoyé des dollars à `address` entre deux instants : jusqu'à 5
-// expéditeurs, des plus anciens aux plus récents
-async function fundersOf(address, fromMs, toMs) {
-  const txs = await tokenTransfers(address, fromMs, toMs);
-  const incoming = new Map();
-  for (const t of txs) {
-    const ts = Number(t.timeStamp) * 1000;
-    if (lc(t.to) !== address || !USDC.has(lc(t.contractAddress)) || ts > toMs + 600000) continue;
-    const from = lc(t.from);
-    if (from === address || POLYMARKET_CONTRACTS.has(from) || /^0x0+$/.test(from)) continue;
-    const amount = (num(t.value) ?? 0) / 10 ** (num(t.tokenDecimal) ?? 6);
-    if (!incoming.has(from)) incoming.set(from, { address: from, amount: 0, count: 0, first: ts, tx: t.hash });
-    const f = incoming.get(from);
-    f.amount += amount;
-    f.count++;
+// Qui a envoyé des dollars (ou des parts de pari) à `address` dans une des
+// fenêtres de temps [début, fin] (ms), essayées dans l'ordre jusqu'à trouver
+// quelque chose : jusqu'à 5 expéditeurs, des plus anciens aux plus récents
+async function fundersOf(address, windows) {
+  for (const [fromMs, toMs] of windows) {
+    if (!(toMs > fromMs)) continue;
+    const incoming = new Map();
+    const add = (from, amount, ts, tx, via) => {
+      if (from === address || POLYMARKET_CONTRACTS.has(from) || /^0x0+$/.test(from)) return;
+      if (!incoming.has(from)) incoming.set(from, { address: from, amount: 0, count: 0, first: ts, tx, via });
+      const f = incoming.get(from);
+      f.amount += amount;
+      f.count++;
+      f.first = Math.min(f.first, ts);
+    };
+    for (const t of await tokenTransfers(address, fromMs, toMs)) {
+      const ts = Number(t.timeStamp) * 1000;
+      if (lc(t.to) !== address || !USDC.has(lc(t.contractAddress)) || ts < fromMs - 600000 || ts > toMs + 600000) continue;
+      add(lc(t.from), (num(t.value) ?? 0) / 10 ** (num(t.tokenDecimal) ?? 6), ts, t.hash, "dollars");
+    }
+    // Parts de pari reçues directement (lecture directe de la blockchain seulement)
+    if (!ETHERSCAN_KEY) for (const t of await sharesReceived(address, fromMs, toMs)) add(t.from, t.value, t.ts, t.hash, "parts");
+    if (incoming.size)
+      return [...incoming.values()]
+        .sort((a, b) => a.first - b.first)
+        .slice(0, 5)
+        .map((f) => ({ ...f, amount: Math.round(f.amount) }));
   }
-  return [...incoming.values()]
-    .sort((a, b) => a.first - b.first)
-    .slice(0, 5)
-    .map((f) => ({ ...f, amount: Math.round(f.amount) }));
+  return [];
 }
 
 // Le founder : celui qui a envoyé le plus (hors plateformes si possible)
@@ -246,23 +302,46 @@ function pickFounder(list) {
   return [...(own.length ? own : list)].sort((a, b) => b.amount - a.amount)[0] ?? null;
 }
 
+// Où chercher l'argent d'un wallet : juste avant son premier pari, puis
+// juste avant ses plus grosses mises suspectes, puis plus loin en arrière
+function windowsFor(firstTrade, bigBets) {
+  return [
+    [firstTrade - 2 * DAY, firstTrade + 3 * HOUR],
+    ...bigBets.map((t) => [Math.max(firstTrade + 3 * HOUR, t - 2 * DAY), t + 10 * 60000]),
+    [firstTrade - 14 * DAY, firstTrade - 2 * DAY],
+  ];
+}
+
 // Chaîne founder → … → origine : tant que le founder est un simple relais
-// (wallet neuf), on regarde qui l'a financé juste avant qu'il envoie l'argent
-async function traceWallet(wallet, firstTrade) {
-  const direct = await fundersOf(wallet, firstTrade - 2 * DAY, firstTrade + 3 * HOUR);
+// (wallet neuf), on regarde qui l'a financé juste avant qu'il envoie l'argent.
+// Si rien n'arrive directement au wallet, on cherche du côté de son
+// propriétaire (le wallet qui signe ses ordres).
+async function traceWallet(wallet, firstTrade, bigBets) {
+  const windows = windowsFor(firstTrade, bigBets);
+  const owner = await safeOwner(wallet);
+  if (owner) await describe(owner);
+  let direct = await fundersOf(wallet, windows);
+  let viaOwner = false;
+  if (!direct.length && owner && owner !== wallet) {
+    direct = await fundersOf(owner, windows);
+    viaOwner = direct.length > 0;
+  }
   for (const f of direct) await describe(f.address);
   const chain = [];
   let cur = pickFounder(direct);
-  const seen = new Set([wallet]);
+  const seen = new Set([wallet, owner]);
   while (cur && !seen.has(cur.address)) {
     seen.add(cur.address);
     chain.push(cur);
     if (chain.length > MAX_HOPS || funders[cur.address]?.kind !== "relais") break;
-    const up = await fundersOf(cur.address, cur.first - 3 * DAY, cur.first);
+    const up = await fundersOf(cur.address, [
+      [cur.first - 3 * DAY, cur.first + 60000],
+      [cur.first - 14 * DAY, cur.first - 3 * DAY],
+    ]);
     for (const f of up) await describe(f.address);
     cur = pickFounder(up);
   }
-  return { direct, chain };
+  return { direct, chain, owner, viaOwner };
 }
 
 // ---------- Programme principal ----------
@@ -270,7 +349,7 @@ async function traceWallet(wallet, firstTrade) {
 const summary = (f) => {
   if (!f) return null;
   const info = funders[f.address] ?? {};
-  return { address: f.address, amount: f.amount, first: f.first, kind: info.kind ?? "wallet", label: info.label ?? null, txs: info.txs ?? null, pm: info.pm ?? null };
+  return { address: f.address, amount: f.amount, first: f.first, via: f.via ?? null, kind: info.kind ?? "wallet", label: info.label ?? null, txs: info.txs ?? null, pm: info.pm ?? null };
 };
 
 async function main(prev) {
@@ -284,11 +363,12 @@ async function main(prev) {
   for (const a of alerts) {
     if (!a.wallet || a.walletAge == null || a.walletAge > 30 * 86400) continue;
     const w = lc(a.wallet);
-    if (!byWallet.has(w)) byWallet.set(w, { wallet: w, name: a.name || "", age: a.walletAge, firstTrade: Infinity, last: 0, alerts: 0, won: 0, lost: 0, pnl: 0, cash: 0, best: 0 });
+    if (!byWallet.has(w)) byWallet.set(w, { wallet: w, name: a.name || "", age: a.walletAge, firstTrade: Infinity, last: 0, bets: [], alerts: 0, won: 0, lost: 0, pnl: 0, cash: 0, best: 0 });
     const x = byWallet.get(w);
     // Premier pari connu du wallet : ses dépôts sont juste avant
     x.firstTrade = Math.min(x.firstTrade, (a.ts - a.walletAge) * 1000);
     x.last = Math.max(x.last, a.ts);
+    x.bets.push({ ts: a.ts * 1000, cash: a.cash ?? 0 });
     x.alerts++;
     x.cash += a.cash ?? 0;
     x.best = Math.max(x.best, a.score ?? 0);
@@ -304,10 +384,11 @@ async function main(prev) {
   funders = prev.funders ?? {};
   for (const [k, v] of Object.entries(funders)) if (now - v.at > FUNDER_TTL) delete funders[k];
 
-  // Chaque wallet n'est lu qu'une fois (son financement ne change pas) ;
-  // les gagnants d'abord, puis les alertes les plus fortes et les plus récentes
+  // Chaque wallet n'est lu qu'une fois (son financement ne change pas), sauf
+  // ceux lus avant l'ajout des autres chemins (v < 2) ; les gagnants d'abord,
+  // puis les alertes les plus fortes et les plus récentes
   const todo = all
-    .filter((x) => !traced[x.wallet] || (traced[x.wallet].error && now - traced[x.wallet].at > RETRY) || !traced[x.wallet].chain)
+    .filter((x) => !traced[x.wallet] || (traced[x.wallet].error && now - traced[x.wallet].at > RETRY) || (traced[x.wallet].v ?? 1) < 2)
     .sort((a, b) => Number(isWinner(b)) - Number(isWinner(a)) || b.best - a.best || b.last - a.last)
     .slice(0, MAX_WALLETS);
   let failures = 0;
@@ -318,8 +399,10 @@ async function main(prev) {
     // Plus le temps : ce wallet sera lu au prochain passage
     if (Date.now() > deadline) return;
     try {
-      const { direct, chain } = await traceWallet(x.wallet, x.firstTrade);
-      traced[x.wallet] = { at: now, direct, chain };
+      // Les 3 plus grosses mises suspectes : l'argent arrive souvent juste avant
+      const bigBets = [...x.bets].sort((a, b) => b.cash - a.cash).slice(0, 3).map((b) => b.ts);
+      const { direct, chain, owner, viaOwner } = await traceWallet(x.wallet, x.firstTrade, bigBets);
+      traced[x.wallet] = { v: 2, at: now, direct, chain, owner, viaOwner };
       done++;
     } catch (err) {
       failures++;
@@ -333,7 +416,9 @@ async function main(prev) {
   // Adresses (hors plateformes) qu'on retrouve derrière plusieurs wallets suspects
   const behind = new Map();
   for (const [wallet, t] of Object.entries(traced)) {
-    for (const f of [...(t.direct ?? []), ...(t.chain ?? [])]) {
+    // Le propriétaire (wallet qui signe) compte aussi : deux wallets suspects
+    // avec le même propriétaire sont à la même personne
+    for (const f of [...(t.direct ?? []), ...(t.chain ?? []), ...(t.owner ? [{ address: t.owner }] : [])]) {
       if (funders[f.address]?.kind === "plateforme") continue;
       if (!behind.has(f.address)) behind.set(f.address, new Set());
       behind.get(f.address).add(wallet);
@@ -350,7 +435,17 @@ async function main(prev) {
     const chain = (t.chain ?? []).map((f) => ({ ...summary(f), shared: shared(f.address) }));
     const origin = chain[chain.length - 1] ?? null;
     const main = [...chain].reverse().find((f) => f.kind === "polymarket" && f.pm?.proxy && f.pm.proxy !== x.wallet);
-    return { founder: chain[0] ?? null, origin, hops: chain.length, main: main ? { funder: main.address, ...main.pm } : null, error: t.error ?? null };
+    const owner = t.owner ? { ...summary({ address: t.owner }), shared: shared(t.owner) } : null;
+    return {
+      founder: chain[0] ?? null,
+      origin,
+      hops: chain.length,
+      via: chain[0]?.via ?? null,
+      owner,
+      viaOwner: t.viaOwner === true,
+      main: main ? { funder: main.address, ...main.pm } : null,
+      error: t.error ?? null,
+    };
   };
 
   const view = {
@@ -364,22 +459,24 @@ async function main(prev) {
       .filter((x) => isWinner(x) && traced[x.wallet])
       .sort((a, b) => b.pnl - a.pnl)
       .slice(0, 60)
-      .map(({ firstTrade, last, ...x }) => {
+      .map(({ firstTrade, last, bets, ...x }) => {
         const t = traced[x.wallet];
         return {
           ...x,
           ...entry(x),
           chain: (t.chain ?? []).map((f) => ({ ...summary(f), shared: shared(f.address) })),
-          funders: (t.direct ?? []).map((f) => ({ ...summary(f), count: f.count, shared: shared(f.address) })),
+          funders: (t.direct ?? []).map((f) => ({ ...summary(f), count: f.count, via: f.via, shared: shared(f.address) })),
         };
       }),
     clusters,
   };
   const withOrigin = Object.values(view.byWallet).filter((e) => e.origin);
   const relays = Object.values(view.byWallet).filter((e) => e.hops > 1).length;
+  const owners = Object.values(view.byWallet).filter((e) => e.owner).length;
+  const viaOther = Object.values(view.byWallet).filter((e) => e.viaOwner || e.via === "parts").length;
   const mains = Object.values(view.byWallet).filter((e) => e.main).length;
   console.log(
-    `Pistes : ${all.length} wallets récents dans les alertes, ${done} lus ce passage (${failures} en échec via ${view.source}), ${withOrigin.length} founders trouvés, ${relays} passés par un relais, ${mains} compte principal probable, ${clusters.length} adresse(s) derrière plusieurs suspects`
+    `Pistes : ${all.length} wallets récents dans les alertes, ${done} lus ce passage (${failures} en échec via ${view.source}), ${withOrigin.length} founders trouvés, ${relays} passés par un relais, ${viaOther} trouvés par le propriétaire ou des parts, ${owners} propriétaires lus, ${mains} compte principal probable, ${clusters.length} adresse(s) derrière plusieurs suspects`
   );
   if (failures && !done) console.log(`::warning::Blockchain Polygon illisible : ${lastError}`);
   return { state: { traced, funders, at: now }, view };

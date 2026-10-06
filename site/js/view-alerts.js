@@ -296,10 +296,13 @@ function funderLine(f) {
           f.pm.value != null ? `, ${usd0.format(f.pm.value)} en jeu` : ""
         }${f.pm.since ? `, actif depuis ${timeAgo(f.pm.since).replace("il y a ", "")}` : ""})</span>`
       : `${f.label ? `<b>${esc(f.label)}</b> ` : ""}${scan(f.address)}`;
-  return `<li><span class="flag ${tone}">${kind}</span> ${who} · a envoyé <b>${usd0.format(f.amount)}</b>${f.count > 1 ? ` en ${f.count} fois` : ""}, ${timeAgo(f.first)}${
+  return `<li><span class="flag ${tone}">${kind}</span> ${who} · a envoyé <b>${amountText(f)}</b>${f.count > 1 ? ` en ${f.count} fois` : ""}, ${timeAgo(f.first)}${
     f.shared > 1 ? ` · <b class="down">a aussi financé ${f.shared - 1} autre${f.shared > 2 ? "s" : ""} wallet${f.shared > 2 ? "s" : ""} suspect${f.shared > 2 ? "s" : ""}</b>` : ""
   }</li>`;
 }
+
+// Dollars, ou parts de pari envoyées directement d'un compte à l'autre
+const amountText = (f) => (f.via === "parts" ? `${new Intl.NumberFormat("fr-FR").format(f.amount)} parts de pari` : usd0.format(f.amount));
 
 // Nom court d'une adresse de la chaîne : pseudo Polymarket, nom public ou adresse
 function who(f) {
@@ -311,7 +314,7 @@ function who(f) {
 function chainText(chain) {
   return [...chain]
     .reverse()
-    .map((f) => `${who(f)} <span class="muted small">(${(KIND_FR[f.kind] ?? KIND_FR.wallet)[0].toLowerCase()}, ${usd0.format(f.amount)})</span>`)
+    .map((f) => `${who(f)} <span class="muted small">(${(KIND_FR[f.kind] ?? KIND_FR.wallet)[0].toLowerCase()}, ${amountText(f)})</span>`)
     .join(" → ");
 }
 
@@ -319,12 +322,21 @@ function chainText(chain) {
 function founderLine(state, a) {
   const e = state.walletTrails?.byWallet?.[String(a.wallet ?? "").toLowerCase()];
   if (!e) return "";
-  if (!e.founder) return e.error ? "" : `<p class="alert-founder muted small">Founder : aucun dépôt en dollars trouvé juste avant ses paris.</p>`;
+  // Le wallet qui signe ses ordres : même propriétaire = même personne
+  const owner =
+    e.owner && (e.owner.shared ?? 1) > 1
+      ? ` · <b class="down">même wallet de signature que ${e.owner.shared - 1} autre${e.owner.shared > 2 ? "s" : ""} wallet${e.owner.shared > 2 ? "s" : ""} suspect${e.owner.shared > 2 ? "s" : ""}</b>`
+      : "";
+  if (!e.founder) return e.error ? "" : `<p class="alert-founder muted small">Founder : rien trouvé (ni dollars, ni parts reçues avant ses paris)${owner}.</p>`;
   const o = e.origin;
   const [kind, tone] = KIND_FR[o.kind] ?? KIND_FR.wallet;
-  const via = e.hops > 1 ? ` <span class="muted">via ${e.hops - 1} wallet${e.hops > 2 ? "s" : ""} relais</span>` : "";
+  const steps = [];
+  if (e.viaOwner) steps.push("passé par son wallet de signature");
+  if (e.hops > 1) steps.push(`via ${e.hops - 1} wallet${e.hops > 2 ? "s" : ""} relais`);
+  if (e.via === "parts") steps.push("parts de pari envoyées directement");
+  const via = steps.length ? ` <span class="muted">(${steps.join(", ")})</span>` : "";
   const many = (o.shared ?? 1) > 1 ? ` · <b class="down">derrière ${o.shared} wallets suspects</b>` : "";
-  return `<p class="alert-founder small">Argent venu de ${who(o)} <span class="flag ${tone}">${kind}</span>${via}${many}</p>`;
+  return `<p class="alert-founder small">Argent venu de ${who(o)} <span class="flag ${tone}">${kind}</span>${via}${many}${owner}</p>`;
 }
 
 function renderTrails(ctx) {
@@ -340,7 +352,8 @@ function renderTrails(ctx) {
     <section class="verdict trails">
       <h2>D'où vient l'argent des wallets suspects gagnants ?</h2>
       <p class="muted small">Wallets de moins de 30 jours dont les alertes ont gagné (${data.candidates ?? data.wallets.length}) : qui leur a envoyé leurs dollars juste avant leurs premiers paris (le founder), lu sur la blockchain Polygon (publique).
-        Quand le founder est un wallet neuf qui ne sert que de relais, le site remonte jusqu'à 3 étages. Le founder de chaque alerte est aussi indiqué sous l'alerte.
+        Quand le founder est un wallet neuf qui ne sert que de relais, le site remonte jusqu'à 3 étages. Il cherche aussi juste avant les plus grosses mises, jusqu'à 14 jours en arrière,
+        du côté du wallet qui signe les ordres (son propriétaire), et les parts de pari envoyées directement d'un compte à l'autre. Le founder de chaque alerte est aussi indiqué sous l'alerte.
         Si l'argent vient d'un autre compte Polymarket, c'est sans doute le compte principal de la même personne. Un transfert ne le prouve pas (ça peut être un paiement),
         et beaucoup viennent d'une plateforme d'échange : piste froide. Mis à jour ${timeAgo(new Date(data.updatedAt).getTime())}.</p>
       ${
