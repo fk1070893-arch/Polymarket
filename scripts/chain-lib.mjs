@@ -58,7 +58,9 @@ export const CHAINS = {
 
 export function makeChain(key) {
   const cfg = CHAINS[key];
-  const servers = cfg.servers.map((url) => ({ url, step: 20000, dead: false, fails: 0 }));
+  // pauseUntil : serveur mis de côté un moment (limite de débit, panne) ;
+  // tooSmall : n'accepte que de toutes petites plages de blocs, inutile
+  const servers = cfg.servers.map((url) => ({ url, step: 10000, pauseUntil: 0, tooSmall: false, fails: 0, lastError: "" }));
   let current = 0;
   let head = null;
 
@@ -69,7 +71,7 @@ export function makeChain(key) {
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
       signal: AbortSignal.timeout(timeout),
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status} sur ${new URL(server.url).host}`);
+    if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status} sur ${new URL(server.url).host}`), { status: res.status });
     const data = await res.json();
     if (data.error) throw Object.assign(new Error(`${data.error.message ?? "erreur"} (${new URL(server.url).host})`), { rpcError: true });
     return data.result;
@@ -118,16 +120,27 @@ export function makeChain(key) {
     return Math.round(h.ts - (h.number - parseInt(blockHex, 16)) * cfg.blockTime);
   }
 
-  // Journaux entre deux instants (ms) pour un filtre donné
+  // Journaux entre deux instants (ms) pour un filtre donné. En cas d'échec,
+  // on réduit d'abord la plage de blocs (la cause la plus fréquente, quel que
+  // soit le message) ; un serveur qui refuse même une petite plage, limite
+  // le débit ou ne répond pas est mis de côté une minute.
   async function scanLogs(filter, fromMs, toMs) {
     const from = await blockAt(Math.floor(fromMs / 1000));
     const to = Math.min((await latestBlock()).number, await blockAt(Math.floor(toMs / 1000)));
     const out = [];
-    let lastErr = null;
     for (let start = from, tries = 0; start <= to; ) {
-      const alive = servers.filter((x) => !x.dead);
-      if (!alive.length || tries > 30) throw lastErr ?? new Error(`aucun serveur ${cfg.name} ne répond`);
-      const server = alive[current % alive.length];
+      const usable = servers.filter((x) => !x.tooSmall);
+      const ready = usable.filter((x) => x.pauseUntil <= Date.now());
+      if (!usable.length || tries > 40) {
+        throw new Error(`serveurs ${cfg.name} injoignables : ${servers.map((x) => `${new URL(x.url).host} → ${x.lastError || "?"}`).join(" ; ")}`);
+      }
+      if (!ready.length) {
+        // Tous en pause : on attend le premier qui revient
+        const wait = Math.min(...usable.map((x) => x.pauseUntil)) - Date.now();
+        await new Promise((r) => setTimeout(r, Math.max(200, Math.min(wait, 15000))));
+        continue;
+      }
+      const server = ready[current % ready.length];
       const end = Math.min(to, start + server.step - 1);
       try {
         out.push(...((await call(server, "eth_getLogs", [{ ...filter, fromBlock: `0x${start.toString(16)}`, toBlock: `0x${end.toString(16)}` }], 20000)) ?? []));
@@ -136,14 +149,17 @@ export function makeChain(key) {
         server.fails = 0;
         server.step = Math.min(MAX_STEP, server.step * 2);
       } catch (err) {
-        lastErr = err;
         tries++;
-        const rangeIssue = (err.rpcError && /range|limit|exceed|too many|block|large/i.test(err.message)) || err.name === "TimeoutError";
-        if (rangeIssue && server.step > MIN_STEP) {
+        server.lastError = err.message.slice(0, 120);
+        const rateOrAuth = [401, 403, 429].includes(err.status) || /rate|too many requests|limit exceeded|credits/i.test(err.message);
+        if (!rateOrAuth && server.step > MIN_STEP) {
           server.step = Math.max(MIN_STEP, Math.floor(server.step / 4));
+        } else if (!rateOrAuth && err.rpcError && /range|block/i.test(err.message)) {
+          // Refuse même une petite plage : ce serveur ne sert à rien ici
+          server.tooSmall = true;
         } else {
-          // Limite trop petite, ou serveur en panne : on passe au suivant
-          if (rangeIssue || ++server.fails >= 3) server.dead = true;
+          server.fails++;
+          server.pauseUntil = Date.now() + Math.min(60000, 5000 * server.fails);
           current++;
         }
       }

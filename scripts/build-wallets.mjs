@@ -352,7 +352,7 @@ async function main(prev) {
   let done = 0;
   let lastError = "";
   const deadline = Date.now() + BUDGET;
-  await mapLimit(todo, 3, async (x) => {
+  await mapLimit(todo, 2, async (x) => {
     // Plus le temps : ce wallet sera lu au prochain passage
     if (Date.now() > deadline) return;
     try {
