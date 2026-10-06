@@ -109,6 +109,24 @@ async function kalshiMarkets() {
 
 // ---------- Metaculus ----------
 
+// L'API Metaculus demande désormais une clé (gratuite, compte Metaculus →
+// paramètres → « API access »), dans le secret GitHub METACULUS_TOKEN.
+// Jamais écrite dans les logs : les erreurs ne citent pas la requête.
+const METACULUS_TOKEN = (process.env.METACULUS_TOKEN ?? "").trim();
+
+async function metaculusGet(url) {
+  const headers = { accept: "application/json" };
+  if (METACULUS_TOKEN) headers.authorization = `Token ${METACULUS_TOKEN}`;
+  let res;
+  try {
+    res = await fetch(url, { headers });
+  } catch {
+    throw new Error("Metaculus injoignable");
+  }
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
 // L'API Metaculus a changé plusieurs fois : on essaie la nouvelle puis l'ancienne
 function metaculusProb(post) {
   const q = post.question ?? post;
@@ -131,8 +149,8 @@ async function metaculus() {
     const out = [];
     let error = null;
     for (let o = 0; o < 500; o += 100) {
-      const data = await getJSON(url(o), 2).catch((err) => {
-        error = err.message.replace(/ sur https?:\/\/\S+/, "");
+      const data = await metaculusGet(url(o)).catch((err) => {
+        error = err.message;
         return null;
       });
       const rows = data?.results ?? [];
@@ -153,7 +171,10 @@ async function metaculus() {
     if (out.length) return { questions: out, status: `${out.length} questions avec une prévision` };
     if (error) console.log(`Metaculus : ${error}`);
   }
-  return { questions: [], status: "API Metaculus indisponible ou prévisions non publiques" };
+  return {
+    questions: [],
+    status: METACULUS_TOKEN ? "API Metaculus indisponible (clé refusée ?)" : "clé Metaculus manquante (secret METACULUS_TOKEN) : comparaison désactivée",
+  };
 }
 
 // ---------- Programme principal ----------

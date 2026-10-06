@@ -94,6 +94,7 @@ jobs:
         timeout-minutes: 4
         env:
           PAGES_URL: ${{ steps.pages.outputs.base_url }}
+          METACULUS_TOKEN: ${{ secrets.METACULUS_TOKEN }}
 
       # Clé gratuite The Odds API dans le secret ODDS_API_KEY (jamais affichée) ;
       # sans clé, l'étape se contente de régler les paris déjà pris
