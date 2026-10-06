@@ -22,7 +22,7 @@ import { VOLUME_BUCKETS, brier, calibration, followSignals, groupOf, hashId, par
 import { modelProbability, parseCryptoQuestion } from "./crypto-model.mjs";
 import { isDeadline, parseUpDown, probUp } from "./niche-lib.mjs";
 import { getJSON, loadPrevious, mapLimit, writeData } from "./lib.mjs";
-import { feeRate, median, spreadOf } from "./paper.mjs";
+import { feeParams, median, spreadOf } from "./paper.mjs";
 
 const DERIBIT = "https://www.deribit.com/api/v2/public";
 const DAY = 86400000;
@@ -102,7 +102,7 @@ function resolvedMarkets(rawEvents) {
         closedAt: parseTime(raw.closedTime),
         volume: m.volume,
         bucket: volumeBucket(m.volume),
-        fee: feeRate(raw),
+        fee: feeParams(raw),
       });
     }
   }

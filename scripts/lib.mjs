@@ -90,7 +90,31 @@ export const nowSec = () => Math.floor(Date.now() / 1000);
 // pour que la page n'ait à charger que le résumé. Repli sur l'ancien fichier
 // unique pour reprendre les tests lancés avant la séparation.
 export async function loadState(name) {
-  return (await loadPrevious(`${name}-state.json`)) ?? (await loadPrevious(`${name}.json`)) ?? null;
+  const state = (await loadPrevious(`${name}-state.json`)) ?? (await loadPrevious(`${name}.json`)) ?? null;
+  if (Array.isArray(state?.bets)) fixFees(state.bets, name === "strategy" || name === "odds" ? 0.03 : 0.04);
+  return state;
+}
+
+// Le 6 octobre 2026, pendant une demi-heure, les frais ont été comptés avec
+// une mauvaise formule (10 % × min(p, 1 − p) par part, bien trop cher) : on
+// recalcule ces paris avec la grille de Polymarket (taux de la catégorie ×
+// p × (1 − p)). Reconnaissables à ce montant de frais exact.
+const BAD_FEES_FROM = Date.parse("2026-10-06T17:50:00Z");
+function fixFees(bets, rate) {
+  const r4 = (v) => Math.round(v * 10000) / 10000;
+  for (const b of bets) {
+    if (!(b.fee > 0) || !(b.cost > 0) || !(b.placedAt >= BAD_FEES_FROM)) continue;
+    const price = b.cost - b.fee;
+    if (Math.abs(b.fee - 0.1 * Math.min(price, 1 - price)) > 0.0003) continue;
+    const fee = rate * price * (1 - price);
+    b.fee = r4(fee);
+    b.cost = r4(Math.min(0.999, price + fee));
+    if (b.best > 0) {
+      const best = b.best < 0.55 ? b.best / 1.1 : (b.best - 0.1) / 0.9;
+      b.best = r4(best + rate * best * (1 - best));
+    }
+    if (b.won != null) b.roi = b.won ? 1 / b.cost - 1 : -1;
+  }
 }
 
 export async function writeState(name, state, view) {

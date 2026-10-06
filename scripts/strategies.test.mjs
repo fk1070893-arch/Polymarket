@@ -93,10 +93,10 @@ test("carnets d'ordres : on achète tant que le lot coûte moins que ce qu'il ra
   const thin = [asksOf({ asks: [{ price: "0.497", size: "1000" }] }), asksOf({ asks: [{ price: "0.5", size: "1000" }] })];
   assert.equal(walkBooks(thin, 1).sets, 1000);
   assert.equal(walkBooks(thin, 1, { minMargin: 0.005 }).sets, 0);
-  // frais : 2 % × min(p, 1 − p) par part rendent le lot à 0,95 $ non rentable au-delà de la marge
+  // frais : 0,08 × p × (1 − p) par part (~2 ¢ par jambe) réduisent le gain
   const cheap = [asksOf({ asks: [{ price: "0.47", size: "10" }] }), asksOf({ asks: [{ price: "0.48", size: "10" }] })];
   close(walkBooks(cheap, 1).profit, 0.5);
-  assert.ok(walkBooks(cheap, 1, { fees: [0.02, 0.02] }).profit < 0.5);
+  assert.ok(walkBooks(cheap, 1, { fees: [{ rate: 0.08, exp: 1 }, { rate: 0.08, exp: 1 }] }).profit < 0.5);
 });
 
 // ---------- Bookmakers ----------
@@ -154,9 +154,11 @@ test("marchés Polymarket comparables aux cotes", () => {
 // ---------- Backtest au prix payé ----------
 
 test("les frais s'ajoutent au prix payé", () => {
-  const s = { p: 0.7, outcome: 0, hs: 0.02, fee: 0.1 };
-  // « Non » : 0,32 + 10 % × min(0,32 ; 0,68) = 0,352
-  close(roiNoExec(s), 1 / 0.352 - 1);
+  const s = { p: 0.7, outcome: 0, hs: 0.02, fee: { rate: 0.4, exp: 1 } };
+  // « Non » : 0,32 + 0,4 × 0,32 × 0,68 = 0,40704
+  close(roiNoExec(s), 1 / 0.40704 - 1);
+  // ancien format numérique : ignoré
+  close(roiNoExec({ ...s, fee: 0.1 }), 1 / 0.32 - 1);
 });
 
 test("le gain au prix payé tient compte de l'écart achat-vente", () => {
@@ -249,10 +251,19 @@ test("meilleure correspondance dans un index", () => {
   assert.equal(bestMatch(idx, "Fed cuts interest rates December 2026", { accept: (x) => x.id !== 1 })?.item.id ?? null, null);
 });
 
-test("frais : comptés seulement si le marché les a activés", async () => {
-  const { feeRate } = await import("./paper.mjs");
-  assert.equal(feeRate({ takerBaseFee: 1000 }), 0);
-  assert.equal(feeRate({ takerBaseFee: 1000, feesEnabled: false }), 0);
-  assert.equal(feeRate({ takerBaseFee: 1000, feesEnabled: true }), 0.1);
-  assert.equal(feeRate({ takerBaseFee: 0, feesEnabled: true }), 0);
+test("frais : grille Polymarket du marché", async () => {
+  const { feeParams, feePerShare } = await import("./fee-lib.mjs");
+  // sport : 0,75 $ pour 100 parts à 50 ¢
+  const sport = feeParams({ feesEnabled: true, feeSchedule: { rate: 0.03, exponent: 1, takerOnly: true } });
+  close(100 * feePerShare(sport, 0.5), 0.75);
+  // favori à 90 ¢ : 2,70 $ pour 1 000 parts
+  close(1000 * feePerShare(sport, 0.9), 2.7);
+  // exposant 2, grille en texte
+  close(feePerShare(feeParams({ feeSchedule: '{"rate":0.25,"exponent":2}' }), 0.5), 0.015625);
+  // sans frais : taux nul, frais désactivés, ou rien d'indiqué
+  assert.equal(feeParams({ feeSchedule: { rate: 0, exponent: 1 } }), null);
+  assert.equal(feeParams({ takerBaseFee: 1000, feesEnabled: false }), null);
+  assert.equal(feeParams({ takerBaseFee: 1000 }), null);
+  // frais activés sans grille : taux par défaut
+  assert.deepEqual(feeParams({ feesEnabled: true }), { rate: 0.04, exp: 1 });
 });

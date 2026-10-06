@@ -1,4 +1,5 @@
 // Calculs du backtest, séparés du réseau pour pouvoir les tester.
+import { feePerShare } from "./fee-lib.mjs";
 
 export const BINS = [0, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0001];
 
@@ -111,8 +112,8 @@ export function roiNo(p, outcome) {
 
 // Même chose au prix réellement payé : on achète au prix vendeur, soit le
 // prix affiché + la moitié de l'écart achat-vente (s.hs), plus les frais
-// preneur du marché s'il en a (s.fee × min(prix, 1 − prix) par part).
-const withFee = (cost, fee) => Math.min(0.999, cost + (fee ?? 0) * Math.min(cost, 1 - cost));
+// preneur du marché s'il en a (grille s.fee, voir fee-lib.mjs).
+const withFee = (cost, fee) => Math.min(0.999, cost + feePerShare(fee, cost));
 export function roiYesExec(s) {
   return roiYes(withFee(Math.min(0.999, s.p + (s.hs ?? 0)), s.fee), s.outcome);
 }

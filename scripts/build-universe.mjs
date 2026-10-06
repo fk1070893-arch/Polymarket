@@ -6,6 +6,7 @@
 //
 // Usage : node scripts/build-universe.mjs
 
+import { feeParams } from "./fee-lib.mjs";
 import { allEventsBetween, writeCache } from "./lib.mjs";
 
 const DAY = 86400000;
@@ -14,7 +15,7 @@ const EVENT_FIELDS = ["id", "slug", "title", "image", "icon", "endDate", "startD
 const MARKET_FIELDS = [
   "id", "question", "conditionId", "groupItemTitle", "outcomes", "outcomePrices", "clobTokenIds", "bestBid", "bestAsk",
   "volumeNum", "volume", "endDate", "startDate", "createdAt", "closed", "active", "acceptingOrders", "enableOrderBook",
-  "negRisk", "sportsMarketType", "gameStartTime", "closedTime", "takerBaseFee", "makerBaseFee", "feesEnabled",
+  "negRisk", "sportsMarketType", "gameStartTime", "closedTime", "feesEnabled", "feeSchedule", "feeType",
 ];
 
 const pick = (obj, fields) => Object.fromEntries(fields.filter((f) => obj[f] !== undefined).map((f) => [f, obj[f]]));
@@ -35,12 +36,14 @@ try {
   const fees = { enabled: 0, rates: {} };
   for (const ev of slim)
     for (const m of ev.markets) {
-      if (m.feesEnabled !== true) continue;
+      const f = feeParams(m);
+      if (!f) continue;
       fees.enabled++;
-      fees.rates[m.takerBaseFee ?? "?"] = (fees.rates[m.takerBaseFee ?? "?"] ?? 0) + 1;
+      const k = `${m.feeType ?? "?"} ${f.rate}^${f.exp}`;
+      fees.rates[k] = (fees.rates[k] ?? 0) + 1;
     }
-  const rates = Object.entries(fees.rates).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([r, n]) => `${r} pb × ${n}`).join(", ");
-  console.log(`${slim.length} événements ouverts (${markets} marchés, dont ${fees.enabled} avec frais activés${rates ? ` : ${rates}` : ""}) lus en ${Math.round((Date.now() - started) / 1000)} s`);
+  const rates = Object.entries(fees.rates).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([r, n]) => `${r} × ${n}`).join(", ");
+  console.log(`${slim.length} événements ouverts (${markets} marchés, dont ${fees.enabled} avec frais${rates ? ` : ${rates}` : ""}) lus en ${Math.round((Date.now() - started) / 1000)} s`);
 } catch (err) {
   console.log(`::warning::Lecture de Polymarket en échec : ${err.message} (chaque étape relira l'API)`);
 }

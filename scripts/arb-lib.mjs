@@ -2,6 +2,7 @@
 // (« Qui va gagner l'élection ? ») : exactement une issue gagne, donc les
 // « Oui » doivent valoir 100 % au total. Calculs séparés du réseau pour
 // pouvoir les tester.
+import { feeParams, feePerShare } from "./fee-lib.mjs";
 
 const num = (v) => {
   const n = typeof v === "string" ? parseFloat(v) : v;
@@ -48,9 +49,8 @@ export function eventPrices(ev) {
       bid: bid != null && bid > 0 && bid < 1 ? bid : null,
       ask: ask != null && ask > 0 && ask < 1 ? ask : null,
       tradable: m.acceptingOrders !== false && m.enableOrderBook !== false,
-      // Frais preneur du marché (0 sur la plupart), en fraction : seulement
-      // si feesEnabled, Gamma remplit takerBaseFee même sans frais
-      fee: m.feesEnabled === true && (num(m.takerBaseFee) ?? 0) > 0 ? num(m.takerBaseFee) / 10000 : 0,
+      // Grille de frais preneur du marché (null si sans frais)
+      fee: feeParams(m),
     };
   });
 
@@ -81,7 +81,7 @@ export function asksOf(book) {
 // n − 1 $ pour les « Non »). On s'arrête quand un lot de plus rapporte
 // moins de `minMargin` de sa mise : au-delà, on immobilise beaucoup
 // d'argent pour presque rien.
-// fees[i] : taux de frais de chaque jambe (frais par part = taux × min(p, 1 − p)).
+// fees[i] : grille de frais de chaque jambe ({ rate, exp }, voir fee-lib.mjs).
 export function walkBooks(books, payout, { minMargin = 0, fees = [] } = {}) {
   const levels = books.map((b) => b.map((o) => ({ ...o })));
   const idx = levels.map(() => 0);
@@ -91,7 +91,7 @@ export function walkBooks(books, payout, { minMargin = 0, fees = [] } = {}) {
     if (levels.some((l, i) => idx[i] >= l.length)) break;
     const unit = levels.reduce((s, l, i) => {
       const p = l[idx[i]].price;
-      return s + p + (fees[i] ?? 0) * Math.min(p, 1 - p);
+      return s + p + feePerShare(fees[i], p);
     }, 0);
     if (payout - unit <= unit * minMargin) break;
     const q = Math.min(...levels.map((l, i) => l[idx[i]].size));

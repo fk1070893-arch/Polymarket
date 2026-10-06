@@ -8,6 +8,7 @@
 //
 // Usage : node scripts/build-arbs.mjs
 
+import { feeParams } from "./fee-lib.mjs";
 import { CLOB } from "../site/js/api.js";
 import { asksOf, eventPrices, walkBooks } from "./arb-lib.mjs";
 import { parseTime } from "./backtest-lib.mjs";
@@ -58,7 +59,7 @@ function compactMarkets(events) {
         bid: raw.bestBid ?? null,
         ask: raw.bestAsk ?? null,
         tokens: raw.clobTokenIds ?? null,
-        fee: raw.feesEnabled === true ? raw.takerBaseFee ?? null : null,
+        fee: feeParams(raw),
         volume: Math.round(m.volume),
         end: parseTime(raw.endDate) ?? parseTime(ev.endDate),
       });

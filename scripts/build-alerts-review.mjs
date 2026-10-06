@@ -18,7 +18,7 @@
 
 import { normalizeMarket, winnerIndex } from "../site/js/normalize.js";
 import { loadState, mapLimit, readData, readState, writeState } from "./lib.mjs";
-import { bookDepth, feePerShare, feeRate, fetchMarketsByCondition } from "./paper.mjs";
+import { bookDepth, feeParams, feePerShare, fetchMarketsByCondition } from "./paper.mjs";
 
 const HOUR = 3600000;
 const MAX_DEPTH_PER_RUN = 80; // lectures de carnet d'ordres par passage
@@ -83,7 +83,7 @@ try {
     const raw = markets.get(a.conditionId);
     const side = a.outcomeIndex;
     const cost = copied.get(a.id);
-    const rate = feeRate(raw);
+    const rate = feeParams(raw);
     const entry = cost ?? (a.price > 0 ? Math.min(0.999, a.price + feePerShare(rate, a.price)) : a.price);
     const base = {
       id: a.id,

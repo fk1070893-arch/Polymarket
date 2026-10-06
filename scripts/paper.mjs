@@ -5,6 +5,7 @@
 import { CLOB, GAMMA } from "../site/js/api.js";
 import { normalizeMarket, winnerIndex } from "../site/js/normalize.js";
 import { bootstrapCI } from "./backtest-lib.mjs";
+import { feeParams, feePerShare } from "./fee-lib.mjs";
 import { getJSON } from "./lib.mjs";
 
 const num = (v) => {
@@ -18,23 +19,15 @@ const num = (v) => {
 //  - l'écart achat-vente : on achète au prix vendeur, pas au prix affiché ;
 //  - le glissement : une grosse mise épuise les meilleures offres et descend
 //    dans le carnet d'ordres, à des prix de plus en plus chers ;
-//  - les frais Polymarket (preneur), présents sur certains marchés :
-//    taux × min(prix, 1 − prix) par part, d'après la grille de Polymarket.
+//  - les frais Polymarket (preneur) : taux × (p × (1 − p))^exposant par
+//    part, d'après la grille du marché (fee-lib.mjs).
 // Ne sont pas comptés : le réseau (Polygon, payé par Polymarket), le dépôt
 // et le retrait d'argent (une fois, pas à chaque pari).
 
 export const STAKE = 100; // mise de référence pour le glissement
 
-// Taux de frais preneur d'un marché (0 sur la plupart des marchés). Gamma
-// remplit takerBaseFee sur presque tous les marchés, même sans frais : seul
-// feesEnabled dit si les frais s'appliquent vraiment.
-export function feeRate(raw) {
-  if (raw?.feesEnabled !== true && raw?.fees_enabled !== true) return 0;
-  const bps = num(raw?.takerBaseFee ?? raw?.taker_base_fee ?? raw?.takerFee);
-  return bps != null && bps > 0 ? bps / 10000 : 0;
-}
-
-export const feePerShare = (rate, price) => rate * Math.min(price, 1 - price);
+// Frais preneur : voir fee-lib.mjs
+export { feeParams, feePerShare } from "./fee-lib.mjs";
 
 // Prix moyen payé pour `stake` $ en descendant dans les offres de vente
 // (triées du moins cher au plus cher). Retourne { avg, spent } ou null.
@@ -104,7 +97,7 @@ export async function bookDepth(raw, side, limit = null) {
 //  { cost, best, fee, filled, slippage } ; repli sur le meilleur prix
 // vendeur (sans glissement) si le carnet d'ordres ne répond pas.
 export async function realCost(raw, side, stake = STAKE) {
-  const rate = feeRate(raw);
+  const rate = feeParams(raw);
   const best = askPrices(raw)[side];
   const token = tokenIds(raw)[side];
   const asks = token ? await fetchAsks(token) : null;
