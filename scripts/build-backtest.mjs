@@ -82,11 +82,16 @@ function closedMarkets(rawEvents) {
       if (w == null || !m.tokenId) continue;
       const end = parseTime(raw.endDate) ?? parseTime(ev.endDate);
       const closed = parseTime(raw.closedTime);
-      // Un marché peut se terminer avant sa date prévue (événement arrivé
-      // plus tôt) : on prend la première des deux dates.
-      const ref = Math.min(...[end, closed].filter((x) => x != null));
+      // On se place toujours 24 h avant la date de fin PRÉVUE. Ne surtout pas
+      // utiliser la date de clôture réelle : pour un marché terminé en
+      // avance (« BTC a touché 130k le 12 »), elle dépend du résultat, et se
+      // placer « la veille de la clôture » revient à regarder toujours la
+      // veille du succès. Les marchés déjà clôturés à ce moment-là sont
+      // écartés : ça, on l'aurait su en vrai.
+      const ref = end;
       const start = parseTime(raw.startDate) ?? parseTime(raw.createdAt) ?? parseTime(ev.startDate);
       if (!Number.isFinite(ref) || (start && ref - LOOKBACK < start)) continue;
+      if (closed != null && closed <= ref - LOOKBACK) continue;
       out.push({
         id: m.id,
         event: String(ev.id),
