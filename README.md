@@ -47,9 +47,16 @@ Tous les prix sont pris 24 h avant la fin (aucune information future), et chaque
 - **Modèle crypto :** une fois le test rendu honnête (statistiques par événement, prix pris 24 h avant la fin *prévue*), il fait jeu égal avec Polymarket (Brier 0,033 contre 0,033) et ses signaux n'ont pas d'avantage prouvé. L'onglet Modèle crypto présente donc ses écarts comme une simple comparaison.
 - **Favoris en sport :** quand la première issue d'un marché sport est cotée 70-80 % la veille, elle ne gagne que 65 % du temps. Parier contre aurait rapporté +34 % par pari, marge [+6 % ; +62 %], positif dans les deux moitiés, et la même tendance apparaît de 60 % à 90 %.
 
-### Test en direct de la stratégie
+### Stratégies testées en direct
 
-`scripts/build-strategy.mjs` applique la règle « contre les favoris sport » aux marchés en cours, à chaque passage de l'Action : marchés sport à deux issues, au moins 1 000 $ de volume, 24 h (± 4 h) avant la fin prévue, première issue cotée 60-90 % → 1 $ fictif sur l'autre issue. Les paris sont réglés à la clôture et affichés en haut de l'onglet Backtest. Ces marchés n'ont jamais été vus par le backtest : c'est la seule vraie preuve. Il faut 50 à 100 paris réglés avant de conclure.
+L'onglet **Stratégies** met les idées à l'épreuve sur les marchés en cours, que le backtest n'a jamais vus. Chaque pari est fictif (1 $), enregistré au **prix réellement payé** (meilleur prix vendeur du moment, pas le prix affiché), puis réglé à la clôture ; le gain au prix affiché est gardé à côté pour comparer. Il faut 50 à 100 paris réglés avant de conclure.
+
+- **Contre les favoris sport** (`scripts/build-strategy.mjs`) : marchés sport à deux issues, 24 h (± 4 h) avant la fin prévue, première issue cotée 60-90 % → 1 $ sur l'autre. Résultat principal sur les marchés finis avec au moins 1 000 $ de volume, comme dans le backtest.
+- **Copier les paris suspects** (`scripts/build-copy.mjs`) : à chaque alerte de score 50+, 1 $ sur la même issue au prix du moment où le site la voit. Le prix payé par le wallet suspect est noté pour mesurer ce que coûte le temps de réaction.
+- **Sport contre bookmakers** (`scripts/build-odds.mjs`) : les cotes des bookmakers (Pinnacle en priorité, via The Odds API), sans leur marge, comparées au prix d'achat Polymarket. Écart d'au moins 3 pts dans les 24 h avant le match → 1 $ fictif. La précision des deux (score de Brier) est aussi suivie. **Activation :** créer une clé gratuite sur the-odds-api.com, puis l'ajouter au dépôt dans *Settings → Secrets and variables → Actions → New repository secret*, nom `ODDS_API_KEY`. La clé n'apparaît jamais dans le code, les logs ou le site ; le quota gratuit (500 requêtes / mois) est réparti automatiquement sur le mois.
+- **Anomalies de prix** (`scripts/build-arbs.mjs`) : dans les événements où une seule issue peut gagner, les « Oui » doivent valoir 100 % au total. Si la somme s'en écarte, acheter toutes les issues (ou tous les « Non ») rapporte un gain sûr ; le site vérifie dans les carnets d'ordres combien on aurait vraiment pu acheter.
+
+Le backtest compte lui aussi l'écart achat-vente : il est mesuré sur les marchés ouverts de même taille et ajouté au prix de la veille.
 
 ### Portefeuille fictif
 
@@ -94,7 +101,10 @@ npm run snapshot   # récupère les marchés (nécessite l'accès à l'API)
 npm run alerts     # détecte les paris suspects
 npm run crypto     # modèle crypto
 npm run backtest   # backtest (BACKTEST_FORCE=true pour forcer)
-npm run strategy   # test en direct de la stratégie
+npm run strategy   # test en direct : contre les favoris sport
+npm run copy       # test en direct : copier les alertes (après alerts)
+npm run arbs       # anomalies de prix
+npm run odds       # bookmakers (ODDS_API_KEY=... pour activer)
 npm test           # tests unitaires
 npm start          # sert le dossier site/ sur http://localhost:3000
 ```
@@ -118,8 +128,13 @@ npm start          # sert le dossier site/ sur http://localhost:3000
 | `site/js/view-crypto.js` | Onglet Modèle crypto |
 | `scripts/backtest-lib.mjs` | Calculs du backtest (+ tests) |
 | `scripts/build-backtest.mjs` | Backtest → `backtest.json` |
-| `site/js/view-backtest.js` | Onglet Backtest (et test en direct) |
-| `scripts/build-strategy.mjs` | Test en direct de la stratégie → `strategy.json` |
+| `site/js/view-backtest.js` | Onglet Backtest |
+| `site/js/view-strategies.js` | Onglet Stratégies (tests en direct, anomalies) |
+| `scripts/paper.mjs` | Paris fictifs : prix payé, règlement, statistiques |
+| `scripts/build-strategy.mjs` | Contre les favoris sport → `strategy.json` |
+| `scripts/build-copy.mjs` | Copier les alertes → `copy.json` |
+| `scripts/odds-lib.mjs`, `scripts/build-odds.mjs` | Bookmakers → `odds.json` |
+| `scripts/arb-lib.mjs`, `scripts/build-arbs.mjs` | Anomalies de prix → `arbs.json` |
 | `.github/workflows/pages.yml` | Instantané + déploiement toutes les 15 min |
 
 Les probabilités sont les prix du marché, pas des certitudes. Données publiques de Polymarket, à titre informatif uniquement.

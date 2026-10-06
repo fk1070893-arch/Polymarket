@@ -25,6 +25,7 @@
         <a href="#" data-view="markets" class="view-tab">Marchés</a>
         <a href="#alertes" data-view="alerts" class="view-tab">Alertes <span class="badge" id="alerts-badge" hidden></span></a>
         <a href="#crypto" data-view="crypto" class="view-tab">Modèle crypto</a>
+        <a href="#strategies" data-view="strategies" class="view-tab">Stratégies</a>
         <a href="#backtest" data-view="backtest" class="view-tab">Backtest</a>
         <a href="#portefeuille" data-view="portfolio" class="view-tab">Mon portefeuille</a>
       </nav>
@@ -111,6 +112,18 @@
         </p>
       </section>
       <section id="crypto-body" aria-live="polite"></section>
+    </main>
+
+    <main class="wrap" id="view-strategies" data-view-panel="strategies" hidden>
+      <section class="intro">
+        <h1>Stratégies en test</h1>
+        <p>
+          Les idées qui avaient l'air de marcher sur le passé, mises à l'épreuve en direct : le site prend des paris
+          fictifs de 1 $ sur les marchés en cours, au prix qu'on aurait vraiment payé, et compte les résultats.
+          C'est le seul vrai test : ces marchés, le backtest ne les a jamais vus.
+        </p>
+      </section>
+      <section id="strategies-body" aria-live="polite"></section>
     </main>
 
     <main class="wrap" id="view-backtest" data-view-panel="backtest" hidden>

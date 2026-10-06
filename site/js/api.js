@@ -149,3 +149,8 @@ export async function loadBacktest() {
 export async function loadStrategy() {
   return fetchJSON(`data/strategy.json?t=${Date.now()}`, 15000);
 }
+
+// Autres tests en direct : copie des alertes, bookmakers, anomalies de prix
+export async function loadData(name) {
+  return fetchJSON(`data/${name}.json?t=${Date.now()}`, 15000);
+}

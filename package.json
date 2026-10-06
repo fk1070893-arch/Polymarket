@@ -9,6 +9,9 @@
     "crypto": "node scripts/build-crypto.mjs",
     "backtest": "node scripts/build-backtest.mjs",
     "strategy": "node scripts/build-strategy.mjs",
+    "copy": "node scripts/build-copy.mjs",
+    "arbs": "node scripts/build-arbs.mjs",
+    "odds": "node scripts/build-odds.mjs",
     "test": "node --test scripts/*.test.mjs",
     "start": "npx --yes serve site"
   }

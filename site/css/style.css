@@ -1690,17 +1690,20 @@ button {
   margin-left: 4px;
 }
 
-#view-backtest h2 {
+#view-backtest h2,
+#view-strategies h2 {
   font-size: 17px;
   margin: 14px 0 10px;
 }
 
-#view-backtest h3 {
+#view-backtest h3,
+#view-strategies h3 {
   font-size: 14.5px;
   margin: 18px 0 8px;
 }
 
-#view-backtest .verdict {
+#view-backtest .verdict,
+#view-strategies .verdict {
   margin-top: 16px;
 }
 
@@ -1714,6 +1717,12 @@ button {
 
 .verdict.live {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.strat-split {
+  margin: 4px 0 10px;
+  padding-left: 20px;
+  font-size: 14px;
 }
 
 .strat-bets {

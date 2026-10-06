@@ -46,14 +46,16 @@ function describe(row, spot) {
 function backtestBanner(bt) {
   const t5 = bt?.crypto?.thresholds?.["0.05"];
   if (!t5) return "";
-  const ci = t5.all.ci;
+  // Au prix réellement payé (écart achat-vente compris) si disponible
+  const ci = t5.all.ciExec ?? t5.all.ci;
+  const roi = t5.all.roiExec ?? t5.all.roi;
   const sp = (v) => `${v > 0 ? "+" : ""}${Math.round(v * 100)} %`;
-  const proven = ci && ci[0] > 0 && t5.A.roi > 0 && t5.B.roi > 0;
+  const proven = ci && ci[0] > 0 && (t5.A.roiExec ?? t5.A.roi) > 0 && (t5.B.roiExec ?? t5.B.roi) > 0;
   return `
     <section class="bt-banner ${proven ? "ok" : "warn"}">
       <b>${proven ? "Le backtest donne un avantage au modèle." : "Le backtest ne montre pas d'avantage au modèle."}</b>
       Rejoué sur ${bt.crypto.events ?? "?"} événements passés, un seul pari par événement, en suivant les écarts de 5 pts ou plus :
-      ${sp(t5.all.roi)} par pari, marge d'erreur ${ci ? `[${sp(ci[0])} ; ${sp(ci[1])}]` : "inconnue"}.
+      ${sp(roi)} par pari${t5.all.roiExec != null ? " au prix payé" : ""}, marge d'erreur ${ci ? `[${sp(ci[0])} ; ${sp(ci[1])}]` : "inconnue"}.
       ${proven ? "" : "Les écarts ci-dessous sont une comparaison, pas des conseils de pari."}
       <a href="#backtest">Voir le backtest</a>
     </section>`;

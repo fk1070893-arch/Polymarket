@@ -109,6 +109,15 @@ export function roiNo(p, outcome) {
   return outcome === 0 ? 1 / (1 - p) - 1 : -1;
 }
 
+// Même chose au prix réellement payé : on achète au prix vendeur, soit le
+// prix affiché + la moitié de l'écart achat-vente (s.hs).
+export function roiYesExec(s) {
+  return roiYes(Math.min(0.999, s.p + (s.hs ?? 0)), s.outcome);
+}
+export function roiNoExec(s) {
+  return roiNo(Math.max(0.001, s.p - (s.hs ?? 0)), s.outcome);
+}
+
 function binIndex(p) {
   for (let i = 0; i < BINS.length - 1; i++) if (p >= BINS[i] && p < BINS[i + 1]) return i;
   return BINS.length - 2;
@@ -130,6 +139,8 @@ export function calibration(samples, { ci = true } = {}) {
         n: xs.length,
         roiYes: mean(xs.map((s) => roiYes(s.p, s.outcome))),
         roiNo: mean(xs.map((s) => roiNo(s.p, s.outcome))),
+        roiYesExec: mean(xs.map(roiYesExec)),
+        roiNoExec: mean(xs.map(roiNoExec)),
       };
     };
     return {
@@ -143,6 +154,11 @@ export function calibration(samples, { ci = true } = {}) {
       roiNo: mean(list.map((s) => roiNo(s.p, s.outcome))),
       ciYes: ci ? bootstrapCI(list, (s) => roiYes(s.p, s.outcome), { seed: 11 + i }) : null,
       ciNo: ci ? bootstrapCI(list, (s) => roiNo(s.p, s.outcome), { seed: 101 + i }) : null,
+      roiYesExec: mean(list.map(roiYesExec)),
+      roiNoExec: mean(list.map(roiNoExec)),
+      ciYesExec: ci ? bootstrapCI(list, roiYesExec, { seed: 211 + i }) : null,
+      ciNoExec: ci ? bootstrapCI(list, roiNoExec, { seed: 307 + i }) : null,
+      halfSpread: mean(list.map((s) => s.hs ?? 0)),
       A: side("A"),
       B: side("B"),
     };
@@ -166,6 +182,7 @@ export function followSignals(samples, threshold, { onePerEvent = true } = {}) {
       return {
         ...s,
         roi: yes ? roiYes(s.p, s.outcome) : roiNo(s.p, s.outcome),
+        roiExec: yes ? roiYesExec(s) : roiNoExec(s),
         won: yes ? s.outcome === 1 : s.outcome === 0,
       };
     });
@@ -183,9 +200,15 @@ export function followSignals(samples, threshold, { onePerEvent = true } = {}) {
     wins: xs.filter((s) => s.won).length,
     pnl: xs.reduce((a, s) => a + s.roi, 0),
     roi: mean(xs.map((s) => s.roi)),
+    roiExec: mean(xs.map((s) => s.roiExec)),
   });
   return {
-    all: { ...summary(signals), events: new Set(signals.map(clusterKey)).size, ci: bootstrapCI(signals, (s) => s.roi, { seed: 3 }) },
+    all: {
+      ...summary(signals),
+      events: new Set(signals.map(clusterKey)).size,
+      ci: bootstrapCI(signals, (s) => s.roi, { seed: 3 }),
+      ciExec: bootstrapCI(signals, (s) => s.roiExec, { seed: 4 }),
+    },
     A: summary(signals.filter((s) => half(clusterKey(s)) === "A")),
     B: summary(signals.filter((s) => half(clusterKey(s)) === "B")),
   };

@@ -1,4 +1,4 @@
-import { loadAlerts, loadBacktest, loadCrypto, loadEvents, loadStrategy, loadHistory, loadMarketStates } from "./api.js";
+import { loadAlerts, loadBacktest, loadCrypto, loadData, loadEvents, loadStrategy, loadHistory, loadMarketStates } from "./api.js";
 import { mainMarket, yesPrice } from "./normalize.js";
 import { lineChart, sparkline } from "./chart.js";
 import {
@@ -22,10 +22,11 @@ import { renderAlerts, alertsForEvent, alertMiniList } from "./view-alerts.js";
 import { renderPortfolio } from "./view-portfolio.js";
 import { cryptoForMarket, renderCrypto } from "./view-crypto.js";
 import { renderBacktest } from "./view-backtest.js";
+import { renderStrategies } from "./view-strategies.js";
 
 const PAGE = 24;
 const LIVE_REFRESH_MS = 2 * 60 * 1000;
-const VIEWS = { "": "markets", alertes: "alerts", crypto: "crypto", backtest: "backtest", portefeuille: "portfolio" };
+const VIEWS = { "": "markets", alertes: "alerts", crypto: "crypto", strategies: "strategies", backtest: "backtest", portefeuille: "portfolio" };
 
 const state = {
   view: "markets",
@@ -43,6 +44,9 @@ const state = {
   alertsError: false,
   portfolio: loadPortfolio(),
   strategy: null, // test en direct de la stratégie (null = pas encore chargé, false = indisponible)
+  copy: null, // test en direct : copier les alertes
+  odds: null, // test en direct : bookmakers
+  arbs: null, // anomalies de prix
   backtest: null, // résultats du backtest (null = pas encore chargé, false = indisponible)
   crypto: null, // modèle crypto (null = pas encore chargé, false = indisponible)
   marketStates: {}, // prix / résultats des marchés hors liste (portefeuille)
@@ -358,6 +362,8 @@ function renderView() {
     renderAlerts(ctx);
   } else if (state.view === "crypto") {
     renderCrypto(ctx);
+  } else if (state.view === "strategies") {
+    renderStrategies(ctx);
   } else if (state.view === "backtest") {
     renderBacktest(ctx);
   } else {
@@ -742,11 +748,19 @@ async function refreshBacktest() {
 }
 
 async function refreshStrategy() {
-  try {
-    state.strategy = await loadStrategy();
-  } catch {
-    state.strategy ??= false;
-  }
+  const load = async (key, fn) => {
+    try {
+      state[key] = await fn();
+    } catch {
+      state[key] ??= false;
+    }
+  };
+  await Promise.all([
+    load("strategy", loadStrategy),
+    load("copy", () => loadData("copy")),
+    load("odds", () => loadData("odds")),
+    load("arbs", () => loadData("arbs")),
+  ]);
 }
 
 async function refreshCrypto() {

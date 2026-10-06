@@ -1,6 +1,6 @@
 // Onglet « Backtest » : résultats de scripts/build-backtest.mjs
 
-import { cents, duration, esc, pct, timeAgo } from "./format.js";
+import { esc, pct, timeAgo } from "./format.js";
 
 const GROUP_LABELS = { all: "Tout", politique: "Politique", crypto: "Crypto", sport: "Sport", eco: "Économie / Tech", autre: "Autres" };
 const KIND_LABELS = { above: "Au-dessus de X à une date", below: "Sous X à une date", between: "Entre A et B à une date", touch: "Atteint / chute à X" };
@@ -31,12 +31,27 @@ function roiCell(v, ci = null) {
   }</td>`;
 }
 
+// Gain au prix réellement payé (écart achat-vente compris) quand le
+// backtest le fournit, sinon au prix affiché.
+const exec = (obj, side) => obj?.[`${side}Exec`] ?? obj?.[side];
+const execCi = (bin, side) => (side === "roiNo" ? bin.ciNoExec ?? bin.ciNo : bin.ciYesExec ?? bin.ciYes);
+
+// Cellule : gain au prix payé, avec le gain au prix affiché en dessous
+function execCell(bin, side) {
+  const raw = bin[side];
+  const paid = bin[`${side}Exec`];
+  if (paid == null) return roiCell(raw, side === "roiNo" ? bin.ciNo : bin.ciYes);
+  const cell = roiCell(paid, execCi(bin, side));
+  return raw == null ? cell : cell.replace(/<\/td>$/, `<span class="ci" title="Au prix affiché, sans l'écart achat-vente">affiché ${signedPct(raw)}</span></td>`);
+}
+
 // Un gain est "stable" s'il est assez grand dans les deux moitiés tirées
-// au sort (par événement) ET si toute sa marge d'erreur est positive.
+// au sort (par événement) ET si toute sa marge d'erreur est positive, au
+// prix réellement payé.
 function stable(bin, side) {
-  const a = bin.A[side];
-  const b = bin.B[side];
-  const ci = side === "roiNo" ? bin.ciNo : bin.ciYes;
+  const a = exec(bin.A, side);
+  const b = exec(bin.B, side);
+  const ci = execCi(bin, side);
   return (
     bin.A.n >= MIN_N / 2 &&
     bin.B.n >= MIN_N / 2 &&
@@ -59,9 +74,9 @@ function findings(bins) {
   for (const b of bins) {
     if (b.n < MIN_N) continue;
     if (stable(b, "roiNo"))
-      out.push(`Acheter <b>« Non »</b> quand « Oui » est à <b>${binLabel(b)}</b> : ${pctSigned(b.roiNo)} par pari, marge ${ciText(b.ciNo)} (moitié A ${pctSigned(b.A.roiNo)}, moitié B ${pctSigned(b.B.roiNo)}, ${b.n} marchés dans ${b.events ?? "?"} événements).`);
+      out.push(`Acheter <b>« Non »</b> quand « Oui » est à <b>${binLabel(b)}</b> : ${pctSigned(exec(b, "roiNo"))} par pari, marge ${ciText(execCi(b, "roiNo"))} (moitié A ${pctSigned(exec(b.A, "roiNo"))}, moitié B ${pctSigned(exec(b.B, "roiNo"))}, ${b.n} marchés dans ${b.events ?? "?"} événements).`);
     if (stable(b, "roiYes"))
-      out.push(`Acheter <b>« Oui »</b> quand il est à <b>${binLabel(b)}</b> : ${pctSigned(b.roiYes)} par pari, marge ${ciText(b.ciYes)} (moitié A ${pctSigned(b.A.roiYes)}, moitié B ${pctSigned(b.B.roiYes)}, ${b.n} marchés dans ${b.events ?? "?"} événements).`);
+      out.push(`Acheter <b>« Oui »</b> quand il est à <b>${binLabel(b)}</b> : ${pctSigned(exec(b, "roiYes"))} par pari, marge ${ciText(execCi(b, "roiYes"))} (moitié A ${pctSigned(exec(b.A, "roiYes"))}, moitié B ${pctSigned(exec(b.B, "roiYes"))}, ${b.n} marchés dans ${b.events ?? "?"} événements).`);
   }
   return out;
 }
@@ -160,15 +175,16 @@ function calibrationTable(bins) {
               <td class="num">${b.n}${b.events != null ? ` <span class="muted">(${b.events})</span>` : ""}</td>
               <td class="num">${pct(b.avgPrice)}</td>
               <td class="num"><b>${pct(b.freq)}</b></td>
-              ${roiCell(b.roiYes, b.ciYes)}
-              ${roiCell(b.roiNo, b.ciNo)}
+              ${execCell(b, "roiYes")}
+              ${execCell(b, "roiNo")}
             </tr>`
             )
             .join("")}
         </tbody>
       </table>
     </div>
-    <p class="muted small">« Acheter Oui / Non » = gain moyen pour 1 $ misé sur chaque marché de la tranche, au prix de la veille. Lignes grisées : moins de ${MIN_N} marchés, pas fiable.</p>`;
+    <p class="muted small">« Acheter Oui / Non » = gain moyen pour 1 $ misé sur chaque marché de la tranche, au prix de la veille <b>réellement payé</b>
+      (prix affiché + la moitié de l'écart achat-vente typique des marchés de cette taille) ; « affiché » = sans cet écart. Lignes grisées : moins de ${MIN_N} marchés, pas fiable.</p>`;
 }
 
 function cryptoSection(c) {
@@ -179,14 +195,15 @@ function cryptoSection(c) {
   const t5 = c.thresholds?.["0.05"];
   const verdict = (() => {
     if (!t5 || t5.all.bets < MIN_N) return "Trop peu de signaux pour conclure.";
-    const ci = t5.all.ci;
-    const okA = t5.A.roi != null && t5.A.roi > 0;
-    const okB = t5.B.roi != null && t5.B.roi > 0;
+    const ci = t5.all.ciExec ?? t5.all.ci;
+    const roi = exec(t5.all, "roi");
+    const okA = exec(t5.A, "roi") > 0;
+    const okB = exec(t5.B, "roi") > 0;
     if (ci && ci[0] > 0 && okA && okB)
-      return `<b class="up">Avec un seul pari par événement, les signaux à 5 pts auraient rapporté ${signedPct(t5.all.roi)} par pari, marge ${ciText(ci)} entièrement positive, et dans les deux moitiés.</b> C'est un vrai signal sur le passé, à confirmer sur les marchés en cours.`;
+      return `<b class="up">Avec un seul pari par événement, les signaux à 5 pts auraient rapporté ${signedPct(roi)} par pari au prix payé, marge ${ciText(ci)} entièrement positive, et dans les deux moitiés.</b> C'est un vrai signal sur le passé, à confirmer sur les marchés en cours.`;
     if (ci && ci[1] < 0)
       return `<b class="down">Avec un seul pari par événement, les signaux à 5 pts auraient perdu de l'argent (marge ${ciText(ci)}).</b> Le modèle tel quel ne bat pas Polymarket.`;
-    return `<b>Avec un seul pari par événement, le résultat (${signedPct(t5.all.roi)}, marge ${ciText(ci) || "inconnue"}) peut encore s'expliquer par le hasard.</b> Pas d'avantage démontré pour l'instant.`;
+    return `<b>Avec un seul pari par événement, le résultat au prix payé (${signedPct(roi)}, marge ${ciText(ci) || "inconnue"}) peut encore s'expliquer par le hasard.</b> Pas d'avantage démontré pour l'instant.`;
   })();
 
   return `
@@ -197,7 +214,7 @@ function cryptoSection(c) {
     <h3>Si on avait suivi les signaux (1 $ par pari, un seul pari par événement)</h3>
     <div class="table-wrap">
       <table class="bt-table">
-        <thead><tr><th>Écart minimum</th><th class="num">Paris</th><th class="num">Gagnés</th><th class="num">Gain / pari (marge 90 %)</th><th class="num">Moitié A</th><th class="num">Moitié B</th><th class="num">Tous les signaux</th></tr></thead>
+        <thead><tr><th>Écart minimum</th><th class="num">Paris</th><th class="num">Gagnés</th><th class="num">Gain / pari au prix payé (marge 90 %)</th><th class="num">Moitié A</th><th class="num">Moitié B</th><th class="num">Tous les signaux</th></tr></thead>
         <tbody>
           ${Object.entries(c.thresholds ?? {})
             .map(
@@ -206,7 +223,7 @@ function cryptoSection(c) {
               <td>${Math.round(Number(t) * 100)} pts</td>
               <td class="num">${r.all.bets}</td>
               <td class="num">${r.all.bets ? pct(r.all.wins / r.all.bets) : "—"}</td>
-              ${roiCell(r.all.roi, r.all.ci)}${roiCell(r.A.roi)}${roiCell(r.B.roi)}
+              ${roiCell(exec(r.all, "roi"), r.all.ciExec ?? r.all.ci)}${roiCell(exec(r.A, "roi"))}${roiCell(exec(r.B, "roi"))}
               <td class="num muted">${c.thresholdsAll?.[t] ? `${c.thresholdsAll[t].all.bets} paris, ${signedPct(c.thresholdsAll[t].all.roi ?? 0)}` : "—"}</td>
             </tr>`
             )
@@ -231,7 +248,7 @@ function cryptoSection(c) {
               <td class="num ${r.brierModel < r.brierPoly ? "up" : ""}">${r.brierModel.toFixed(3)}</td>
               <td class="num ${r.brierPoly <= r.brierModel ? "up" : ""}">${r.brierPoly.toFixed(3)}</td>
               <td class="num">${r.signals.all.bets}</td>
-              ${roiCell(r.signals.all.roi, r.signals.all.ci)}
+              ${roiCell(exec(r.signals.all, "roi"), r.signals.all.ciExec ?? r.signals.all.ci)}
             </tr>`
             )
             .join("")}
@@ -254,13 +271,20 @@ function cryptoSection(c) {
               <td class="num ${r.brierModel < r.brierPoly ? "up" : ""}">${r.brierModel.toFixed(3)}</td>
               <td class="num ${r.brierPoly <= r.brierModel ? "up" : ""}">${r.brierPoly.toFixed(3)}</td>
               <td class="num">${r.signals.all.bets}</td>
-              ${roiCell(r.signals.all.roi, r.signals.all.ci)}
+              ${roiCell(exec(r.signals.all, "roi"), r.signals.all.ciExec ?? r.signals.all.ci)}
             </tr>`
             )
             .join("")}
         </tbody>
       </table>
     </div>`;
+}
+
+function spreadsLine(spreads) {
+  const parts = Object.entries(spreads ?? {})
+    .filter(([, v]) => v.median != null)
+    .map(([k, v]) => `${esc(VOLUME_LABELS[k] ?? k)} ${(v.median * 100).toFixed(1).replace(".", ",")} pts`);
+  return parts.length ? ` · écart achat-vente typique : ${parts.join(", ")}` : "";
 }
 
 function bind(ctx) {
@@ -280,76 +304,12 @@ function bind(ctx) {
   });
 }
 
-// Test en direct de la stratégie « contre les favoris sport »
-function strategySection(st) {
-  if (st === null) return `<section class="verdict live"><h2>Test en direct</h2><p class="muted">Chargement…</p></section>`;
-  if (!st || !st.summary) {
-    return `<section class="verdict live"><h2>Test en direct : contre les favoris sport</h2>
-      <p>Le test démarre au prochain passage de la GitHub Action (toutes les 15 minutes).</p></section>`;
-  }
-  const s = st.summary;
-  const sp = (v) => `${v > 0 ? "+" : ""}${Math.round(v * 100)} %`;
-  const verdict = (() => {
-    if (!s.n) return `<p>Aucun pari réglé pour l'instant. Les premiers résultats arrivent environ 24 h après les premiers paris.</p>`;
-    const sure = s.ci && (s.ci[0] > 0 || s.ci[1] < 0);
-    const line =
-      s.n < 50
-        ? `<b>Trop tôt pour conclure</b> (${s.n} pari${s.n > 1 ? "s" : ""} réglé${s.n > 1 ? "s" : ""}) : il en faut au moins 50 à 100.`
-        : s.ci && s.ci[0] > 0
-          ? `<b class="up">La stratégie gagne aussi sur des marchés que le backtest n'a jamais vus.</b>`
-          : s.ci && s.ci[1] < 0
-            ? `<b class="down">La stratégie perd de l'argent en direct : le biais trouvé dans le passé ne tient pas.</b>`
-            : `<b>Pas encore de conclusion : le résultat peut encore s'expliquer par le hasard.</b>`;
-    return `<p>Les issues pariées ont gagné <b>${pct(s.winRate)}</b> du temps (${s.wins}/${s.n}) ; leur prix annonçait <b>${pct(s.expectedWinRate)}</b>.
-      Gain moyen : <b class="${s.roi >= 0 ? "up" : "down"}">${sp(s.roi)}</b> par pari${
-        s.ci ? `, marge d'erreur <span class="${sure ? "" : "muted"}">[${sp(s.ci[0])} ; ${sp(s.ci[1])}]</span>` : ""
-      } (${s.pnl >= 0 ? "+" : "−"}${Math.abs(s.pnl).toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $ pour ${s.n} $ misés).</p><p>${line}</p>`;
-  })();
-  const recent = (st.bets ?? []).slice(0, 12);
-  return `
-    <section class="verdict live">
-      <h2>Test en direct : contre les favoris sport</h2>
-      <p class="muted small">Démarré ${timeAgo(new Date(st.startedAt).getTime())} · règle : ${esc(st.rule?.description ?? "")}</p>
-      <div class="pf-stats">
-        <div class="stat"><span>Paris réglés</span><strong>${s.n ?? 0}</strong><em class="muted">${s.events ?? 0} événement${(s.events ?? 0) > 1 ? "s" : ""}</em></div>
-        <div class="stat"><span>En attente</span><strong>${s.pending ?? 0}</strong></div>
-        <div class="stat"><span>Gain / pari</span><strong class="${(s.roi ?? 0) >= 0 ? "up" : "down"}">${s.n ? sp(s.roi) : "—"}</strong></div>
-      </div>
-      ${verdict}
-      ${
-        s.all?.n
-          ? `<p class="muted small">Comptés comme dans le backtest : les marchés finis avec au moins 1 000 $ de volume (${s.n ?? 0}).
-              Sur tous les paris réglés (${s.all.n}), y compris les petits marchés : ${sp(s.all.roi)} par pari.</p>`
-          : ""
-      }
-      ${
-        recent.length
-          ? `<h3>Derniers paris fictifs</h3><div class="strat-bets">${recent
-              .map((b) => {
-                const status =
-                  b.outcome == null
-                    ? `<span class="muted">${b.end > Date.now() ? `fin dans ${duration((b.end - Date.now()) / 1000)}` : "résultat en attente"}</span>`
-                    : b.outcome === 0
-                      ? `<span class="up"><b>Gagné ${sp(b.roi)}</b></span>`
-                      : `<span class="down"><b>Perdu</b></span>`;
-                return `<div class="strat-bet">
-                  <span class="strat-q"><b>${esc(b.eventTitle || b.question)}</b>
-                    <span class="muted small">${b.question !== b.eventTitle ? `${esc(b.question)} · ` : ""}favori ${esc(b.favorite)} à ${pct(b.p)}</span></span>
-                  <span class="strat-pick">1 $ sur <b>${esc(b.bet)}</b> à ${cents(1 - b.p)}</span>
-                  ${status}
-                </div>`;
-              })
-              .join("")}</div>`
-          : ""
-      }
-    </section>`;
-}
-
 export function renderBacktest(ctx) {
   bind(ctx);
   const data = ctx.state.backtest;
   const body = $("backtest-body");
-  const live = strategySection(ctx.state.strategy);
+  const live = `<section class="bt-banner ok">Les stratégies trouvées ici sont mises à l'épreuve en direct, sur des marchés que le backtest n'a jamais vus :
+    <a href="#strategies">voir l'onglet Stratégies</a></section>`;
   if (data === null) {
     body.innerHTML = live + `<p class="empty">Chargement du backtest…</p>`;
     return;
@@ -375,7 +335,7 @@ export function renderBacktest(ctx) {
 
     <p class="muted small">Backtest calculé ${timeAgo(new Date(data.updatedAt).getTime())} · prix pris ${data.lookbackHours} h avant la fin de chaque marché${
       data.partial ? " · calcul interrompu (limite de temps), résultats partiels" : ""
-    }.</p>
+    }${spreadsLine(data.spreads)}.</p>
 
     <section class="verdict">
       <h2>1. Polymarket est-il bien calibré ?</h2>
@@ -414,7 +374,7 @@ export function renderBacktest(ctx) {
           ${
             found.length
               ? `<ul>${found.map((f) => `<li>${f}</li>`).join("")}</ul>
-                 <p class="muted small">« Stable » = au moins +${MIN_ROI * 100} % dans les deux moitiés (tirées au sort par événement) et une marge d'erreur entièrement positive. Ça reste du passé : rien ne garantit que ça dure, et les frais / l'écart achat-vente rognent ces gains.</p>`
+                 <p class="muted small">« Stable » = au moins +${MIN_ROI * 100} % dans les deux moitiés (tirées au sort par événement) et une marge d'erreur entièrement positive. Gains au prix réellement payé (écart achat-vente compris). Ça reste du passé : rien ne garantit que ça dure, c'est l'onglet Stratégies qui le vérifie en direct.</p>`
               : `<p>Aucun biais assez fort et stable dans cette catégorie : Polymarket y est bien calibré, il n'y a pas d'argent facile à prendre en pariant systématiquement sur une tranche de prix.</p>`
           }
         </div>
@@ -435,7 +395,7 @@ export function renderBacktest(ctx) {
         <li><b>Deux moitiés :</b> les événements sont répartis au hasard en A et B. Un effet qui n'existe que dans une moitié est probablement de la chance.</li>
         <li><b>Marge d'erreur :</b> l'intervalle entre crochets contient 90 % des résultats qu'on obtiendrait en retirant d'autres événements au hasard. Il apparaît en gras quand il ne contient pas zéro : le gain (ou la perte) a alors peu de chances d'être dû au hasard.</li>
         <li><b>Le passé n'est pas l'avenir :</b> un biais connu finit souvent par disparaître quand d'autres l'exploitent.</li>
-        <li><b>Frais et liquidité :</b> les gains sont calculés au prix affiché ; en vrai, l'écart achat-vente et la taille des mises les réduisent.</li>
+        <li><b>Prix payé :</b> on achète au prix vendeur, plus cher que le prix affiché. L'écart est estimé à partir des marchés ouverts aujourd'hui de même taille. Les grosses mises font aussi bouger le prix : les gains valent pour de petites sommes.</li>
         <li><b>Petits marchés :</b> c'est là que les prix se trompent le plus souvent, mais aussi là où l'écart achat-vente est le plus large et où le dernier prix peut dater de plusieurs heures. Un gain affiché sur la tranche « moins de 10 k$ » est le plus dur à obtenir en vrai : on ne peut y miser que de petites sommes sans faire bouger le prix.</li>
         <li><b>Modèle crypto simplifié :</b> le backtest utilise la volatilité DVOL (à la monnaie, 30 jours), sans le « sourire » de volatilité utilisé en direct.</li>
       </ul>

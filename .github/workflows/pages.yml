@@ -67,6 +67,29 @@ jobs:
         env:
           PAGES_URL: ${{ steps.pages.outputs.base_url }}
 
+      - name: Test en direct - copier les paris suspects
+        run: node scripts/build-copy.mjs
+        continue-on-error: true
+        env:
+          PAGES_URL: ${{ steps.pages.outputs.base_url }}
+
+      - name: Anomalies de prix (issues exclusives)
+        run: node scripts/build-arbs.mjs
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          PAGES_URL: ${{ steps.pages.outputs.base_url }}
+
+      # Clé gratuite The Odds API dans le secret ODDS_API_KEY (jamais affichée) ;
+      # sans clé, l'étape se contente de régler les paris déjà pris
+      - name: Test en direct - sport contre bookmakers
+        run: node scripts/build-odds.mjs
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          PAGES_URL: ${{ steps.pages.outputs.base_url }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+
       # Recalculé au plus une fois par jour (ou à la demande), sinon republié tel quel
       - name: Backtest sur les marchés terminés
         run: node scripts/build-backtest.mjs

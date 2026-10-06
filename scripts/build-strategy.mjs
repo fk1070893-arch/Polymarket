@@ -7,7 +7,9 @@
 //  - 24 h (± 4 h) avant la date de fin prévue ;
 //  - si la première issue est cotée entre 60 % et 90 %, on achète l'autre.
 // Les paris sont enregistrés au moment où ils auraient été pris, puis réglés
-// à la clôture. Le backtest ne gardait que les marchés ayant fini avec au
+// à la clôture, au prix réellement payé (le meilleur prix vendeur du moment,
+// pas le prix affiché), avec le gain au prix affiché à côté pour comparer.
+// Le backtest ne gardait que les marchés ayant fini avec au
 // moins 1 000 $ de volume ; ce volume final n'est pas connu au moment de
 // parier (l'essentiel des échanges a lieu dans les dernières heures). On
 // parie donc sans filtre de volume, on note le volume final à la clôture,
@@ -19,9 +21,10 @@
 // Usage : node scripts/build-strategy.mjs
 
 import { GAMMA } from "../site/js/api.js";
-import { normalizeMarket, winnerIndex } from "../site/js/normalize.js";
-import { bootstrapCI, groupOf, parseTime, roiNo } from "./backtest-lib.mjs";
+import { normalizeMarket } from "../site/js/normalize.js";
+import { groupOf, parseTime } from "./backtest-lib.mjs";
 import { getJSON, loadPrevious, writeData } from "./lib.mjs";
+import { askPrices, paperStats, settleBets, spreadOf } from "./paper.mjs";
 
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
@@ -44,7 +47,7 @@ async function candidates(now) {
   const out = [];
   // Décompte de chaque filtre, pour vérifier dans les logs que la règle
   // trouve bien des marchés
-  const seen = { events: 0, sport: 0, binary: 0, volume: 0, window: 0 };
+  const seen = { events: 0, sport: 0, binary: 0, volume: 0, window: 0, quoted: 0 };
   for (let page = 0; page < 5; page++) {
     const params = new URLSearchParams({
       tag_slug: "sports",
@@ -72,6 +75,7 @@ async function candidates(now) {
         const left = end - now;
         if (left < WINDOW[0] || left > WINDOW[1]) continue;
         seen.window++;
+        if (askPrices(raw)[1] != null) seen.quoted++;
         out.push({ ev, raw, m, end });
       }
     }
@@ -79,63 +83,47 @@ async function candidates(now) {
   }
   console.log(
     `Filtres : ${seen.events} événements, ${seen.sport} sport, ${seen.binary} marchés à deux issues, ` +
-      `${seen.volume} déjà à 1 000 $ de volume, ${seen.window} dans la fenêtre 20-28 h`
+      `${seen.volume} déjà à 1 000 $ de volume, ${seen.window} dans la fenêtre 20-28 h (${seen.quoted} avec un prix vendeur)`
   );
   return out;
 }
 
-async function resolve(bets, now) {
-  const pending = bets.filter((b) => b.outcome == null && now > b.end + HOUR).slice(0, 300);
-  for (let i = 0; i < pending.length; i += 40) {
-    const ids = pending.slice(i, i + 40).map((b) => b.id);
-    const qs = ids.map((id) => `id=${encodeURIComponent(id)}`).join("&");
-    const rows = [
-      ...(await getJSON(`${GAMMA}/markets?${qs}&limit=${ids.length}`).catch(() => [])),
-      ...(await getJSON(`${GAMMA}/markets?${qs}&limit=${ids.length}&closed=true`).catch(() => [])),
-    ];
-    for (const r of rows) {
-      const m = normalizeMarket(r);
-      const w = winnerIndex(m);
-      const bet = bets.find((b) => b.id === m.id);
-      if (!bet || w == null || bet.outcome != null) continue;
-      bet.outcome = w === 0 ? 1 : 0; // 1 = le favori (première issue) a gagné
-      bet.finalVolume = Math.round(m.volume);
-      bet.roi = roiNo(bet.p, bet.outcome);
-      bet.resolvedAt = now;
-    }
+// Anciens paris (avant le prix payé) : on garde leur résultat au prix affiché
+function migrate(b) {
+  if (b.side != null) return b;
+  const out = { ...b, side: 1, mid: 1 - b.p, cost: null };
+  if (b.outcome != null) {
+    out.won = b.outcome === 0;
+    out.roiMid = b.roi;
+    out.roi = null;
   }
+  delete out.outcome;
+  return out;
 }
 
 function summarize(bets) {
-  const settled = bets.filter((b) => b.outcome != null);
+  const settled = bets.filter((b) => b.won != null);
   // Même population que le backtest : volume final d'au moins 1 000 $
   const done = settled.filter((b) => (b.finalVolume ?? 0) >= MIN_VOLUME);
-  const stats = (xs) => {
-    if (!xs.length) return { n: 0 };
-    const wins = xs.filter((b) => b.outcome === 0).length;
-    return {
-      n: xs.length,
-      events: new Set(xs.map((b) => b.event)).size,
-      wins,
-      winRate: wins / xs.length,
-      // Ce que le marché attendait : notre issue gagne avec une proba 1 - p
-      expectedWinRate: xs.reduce((s, b) => s + (1 - b.p), 0) / xs.length,
-      roi: xs.reduce((s, b) => s + b.roi, 0) / xs.length,
-      pnl: xs.reduce((s, b) => s + b.roi, 0),
-      ci: bootstrapCI(xs, (b) => b.roi, { seed: 5 }),
-    };
-  };
   const bands = [
     [0.6, 0.7],
     [0.7, 0.8],
     [0.8, 0.9],
-  ].map(([lo, hi]) => ({ lo, hi, ...stats(done.filter((b) => b.p >= lo && b.p < hi)) }));
-  return { ...stats(done), pending: bets.length - settled.length, lowVolume: settled.length - done.length, all: stats(settled), bands };
+  ].map(([lo, hi]) => ({ lo, hi, ...paperStats(done.filter((b) => b.p >= lo && b.p < hi)) }));
+  const spreads = bets.map((b) => b.spread).filter((v) => v != null).sort((x, y) => x - y);
+  return {
+    ...paperStats(done),
+    pending: bets.length - settled.length,
+    lowVolume: settled.length - done.length,
+    all: paperStats(settled),
+    bands,
+    medianSpread: spreads.length ? spreads[Math.floor(spreads.length / 2)] : null,
+  };
 }
 
 async function main(prev) {
   const now = Date.now();
-  const bets = (prev.bets ?? []).filter((b) => now - b.placedAt < KEEP_FOR);
+  const bets = (prev.bets ?? []).filter((b) => now - b.placedAt < KEEP_FOR).map(migrate);
   const known = new Set(bets.map((b) => b.id));
 
   let added = 0;
@@ -143,6 +131,7 @@ async function main(prev) {
     if (known.has(m.id)) continue;
     const p = m.prices[0];
     if (!(p >= BAND[0] && p <= BAND[1])) continue;
+    const cost = askPrices(raw)[1];
     bets.push({
       id: m.id,
       event: String(ev.id),
@@ -152,25 +141,32 @@ async function main(prev) {
       favorite: m.outcomes[0],
       bet: m.outcomes[1],
       p,
+      side: 1,
+      mid: 1 - p,
+      // Prix réellement payé pour l'autre issue (null si pas d'offre)
+      cost,
+      spread: spreadOf(raw),
       volume: Math.round(m.volume),
       end,
       placedAt: now,
-      outcome: null,
+      won: null,
       roi: null,
     });
     known.add(m.id);
     added++;
   }
-  await resolve(bets, now);
+  await settleBets(bets, now);
   const summary = summarize(bets);
   console.log(`${added} nouveaux paris fictifs, ${summary.pending} en attente, ${summary.n} réglés`);
   if (summary.n) {
-    const p = (v) => `${v >= 0 ? "+" : ""}${Math.round(v * 100)}%`;
+    const p = (v) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${Math.round(v * 100)}%`);
     console.log(
-      `Résultat : ${summary.wins}/${summary.n} gagnés (attendu ${Math.round(summary.expectedWinRate * 100)}%), gain/pari ${p(summary.roi)}` +
-        (summary.ci ? ` [${p(summary.ci[0])} ; ${p(summary.ci[1])}]` : "")
+      `Résultat : ${summary.wins}/${summary.n} gagnés (attendu ${Math.round(summary.expectedWinRate * 100)}%), ` +
+        `gain/pari au prix payé ${p(summary.roi)}${summary.ci ? ` [${p(summary.ci[0])} ; ${p(summary.ci[1])}]` : ""} (${summary.nExec} paris), ` +
+        `au prix affiché ${p(summary.roiMid)}`
     );
   }
+  if (summary.medianSpread != null) console.log(`Écart achat-vente médian à l'entrée : ${(summary.medianSpread * 100).toFixed(1)} pts`);
   bets.sort((a, b) => b.placedAt - a.placedAt);
   return {
     updatedAt: new Date(now).toISOString(),

@@ -21,6 +21,7 @@ import { normalizeMarket, winnerIndex } from "../site/js/normalize.js";
 import { VOLUME_BUCKETS, brier, calibration, followSignals, groupOf, hashId, parseTime, volumeBucket } from "./backtest-lib.mjs";
 import { modelProbability, parseCryptoQuestion } from "./crypto-model.mjs";
 import { getJSON, loadPrevious, mapLimit, writeData } from "./lib.mjs";
+import { median, spreadOf } from "./paper.mjs";
 
 const DERIBIT = "https://www.deribit.com/api/v2/public";
 const DAY = 86400000;
@@ -147,9 +148,48 @@ async function withPrices(list) {
   return list.filter((m) => m.p != null && m.p > 0 && m.p < 1);
 }
 
+// ---------- Écart achat-vente ----------
+
+// L'historique ne garde pas les carnets d'ordres : on mesure l'écart
+// achat-vente actuel des marchés ouverts, par tranche de volume, et on
+// l'applique aux marchés passés de la même tranche. C'est une estimation :
+// la veille de la fin, l'écart peut être un peu différent.
+async function spreadStudy() {
+  const out = {};
+  for (const b of VOLUME_BUCKETS) {
+    const spreads = [];
+    for (let page = 0; page < 3; page++) {
+      const params = new URLSearchParams({
+        active: "true",
+        closed: "false",
+        volume_num_min: String(Math.max(b.min, MIN_VOLUME)),
+        limit: "100",
+        offset: String(page * 100),
+      });
+      if (b.max < Infinity) params.set("volume_num_max", String(b.max));
+      const rows = await getJSON(`${GAMMA}/markets?${params}`).catch(() => []);
+      for (const r of rows) {
+        const sp = spreadOf(r);
+        // On écarte les marchés quasi joués (prix extrêmes) et les carnets vides
+        if (sp != null && sp < 0.5 && Number(r.bestBid) > 0.02 && Number(r.bestAsk) < 0.98) spreads.push(sp);
+      }
+      if (rows.length < 100) break;
+    }
+    out[b.key] = { n: spreads.length, median: median(spreads) };
+  }
+  console.log(`Écart achat-vente médian : ${Object.entries(out).map(([k, v]) => `${k} ${v.median == null ? "?" : (v.median * 100).toFixed(1) + " pts"} (${v.n})`).join(", ")}`);
+  return out;
+}
+
+// Moitié de l'écart = ce qu'on paie en plus du prix affiché
+function withHalfSpread(samples, spreads) {
+  for (const s of samples) s.hs = (spreads?.[s.bucket]?.median ?? 0) / 2;
+  return samples;
+}
+
 // ---------- Étude 1 : calibration ----------
 
-async function calibrationStudy() {
+async function calibrationStudy(spreads) {
   // Les plus gros événements, puis une requête par tranche de volume pour
   // avoir aussi des petits marchés
   const all = new Map();
@@ -162,7 +202,7 @@ async function calibrationStudy() {
   const markets = closedMarkets(events).filter((m) => m.volume >= MIN_VOLUME);
   const counts = VOLUME_BUCKETS.map((b) => `${b.key}: ${markets.filter((m) => m.bucket === b.key).length}`).join(", ");
   console.log(`Calibration : ${events.length} événements, ${markets.length} marchés exploitables (${counts})`);
-  const samples = await withPrices(sampleByBucket(markets, MAX_PER_BUCKET));
+  const samples = withHalfSpread(await withPrices(sampleByBucket(markets, MAX_PER_BUCKET)), spreads);
   console.log(`Calibration : ${samples.length} marchés avec un prix 24 h avant`);
 
   const byGroup = {};
@@ -209,7 +249,7 @@ function valueAt(series, ts) {
   return ts - series[lo][0] < 6 * HOUR ? series[lo][1] : null;
 }
 
-async function cryptoStudy() {
+async function cryptoStudy(spreads) {
   const now = Date.now();
   const from = now - CRYPTO_MONTHS * 30 * DAY - 2 * DAY;
   const market = {};
@@ -245,6 +285,7 @@ async function cryptoStudy() {
     if (model == null || !Number.isFinite(model)) continue;
     samples.push({ id: m.id, event: m.event, kind: m.q.kind, asset: m.q.asset, bucket: m.bucket, p: m.p, model, outcome: m.outcome });
   }
+  withHalfSpread(samples, spreads);
   console.log(`Crypto : ${samples.length} marchés rejoués`);
 
   const byKind = {};
@@ -291,7 +332,8 @@ function logSummary(calib, crypto) {
       .map(
         (b) =>
           `  ${Math.round(b.lo * 100)}-${Math.round(b.hi * 100)}% n=${b.n} év=${b.events} prix=${Math.round(b.avgPrice * 100)}% réel=${Math.round(b.freq * 100)}% ` +
-          `Oui=${p(b.roiYes)} ${ci(b.ciYes)} (A ${p(b.A.roiYes)} / B ${p(b.B.roiYes)}) Non=${p(b.roiNo)} ${ci(b.ciNo)} (A ${p(b.A.roiNo)} / B ${p(b.B.roiNo)})`
+          `Oui=${p(b.roiYes)} ${ci(b.ciYes)} (A ${p(b.A.roiYes)} / B ${p(b.B.roiYes)}) Non=${p(b.roiNo)} ${ci(b.ciNo)} (A ${p(b.A.roiNo)} / B ${p(b.B.roiNo)})` +
+          ` | prix payé : Oui=${p(b.roiYesExec)} ${ci(b.ciYesExec)} Non=${p(b.roiNoExec)} ${ci(b.ciNoExec)} (A ${p(b.A.roiNoExec)} / B ${p(b.B.roiNoExec)})`
       )
       .join("\n");
   console.log(`\n=== Calibration (${calib.n} marchés, ${calib.events} événements, Brier ${calib.brier?.toFixed(3)}) ===\n${rows(calib.bins)}`);
@@ -301,7 +343,7 @@ function logSummary(calib, crypto) {
     console.log(`\n=== Modèle crypto (${crypto.n} marchés, ${crypto.events} événements) Brier modèle ${crypto.brierModel.toFixed(3)} / Polymarket ${crypto.brierPoly.toFixed(3)} ===`);
     for (const [t, r] of Object.entries(crypto.thresholds))
       console.log(
-        `  écart ≥ ${Math.round(t * 100)} pts, 1 pari/événement : ${r.all.bets} paris, ${r.all.wins} gagnés, gain/pari ${p(r.all.roi)} ${ci(r.all.ci)} (A ${p(r.A.roi)} / B ${p(r.B.roi)})` +
+        `  écart ≥ ${Math.round(t * 100)} pts, 1 pari/événement : ${r.all.bets} paris, ${r.all.wins} gagnés, gain/pari ${p(r.all.roi)} ${ci(r.all.ci)} (A ${p(r.A.roi)} / B ${p(r.B.roi)}), au prix payé ${p(r.all.roiExec)} ${ci(r.all.ciExec)}` +
           ` | tous les signaux : ${crypto.thresholdsAll[t].all.bets} paris, ${p(crypto.thresholdsAll[t].all.roi)}`
       );
     for (const [k, r] of Object.entries(crypto.byVolume ?? {}))
@@ -322,12 +364,14 @@ if (prev && !force && age < REFRESH_EVERY) {
   await writeData("backtest.json", prev);
 } else {
   try {
-    const calib = await calibrationStudy();
-    const crypto = outOfTime() ? null : await cryptoStudy();
+    const spreads = await spreadStudy();
+    const calib = await calibrationStudy(spreads);
+    const crypto = outOfTime() ? null : await cryptoStudy(spreads);
     await writeData("backtest.json", {
       updatedAt: new Date().toISOString(),
       lookbackHours: LOOKBACK / HOUR,
       partial: outOfTime(),
+      spreads,
       calibration: calib,
       crypto,
     });
