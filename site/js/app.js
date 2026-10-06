@@ -29,7 +29,7 @@ import { renderTraders } from "./view-traders.js";
 import { marketInsights } from "./view-insights.js";
 
 const PAGE = 24;
-const LIVE_REFRESH_MS = 2 * 60 * 1000;
+const LIVE_REFRESH_MS = 30 * 1000; // prix rechargés toutes les 30 s quand la page est ouverte
 const VIEWS = {
   "": "markets",
   radar: "radar",
@@ -912,8 +912,16 @@ state.view = viewFromHash().view;
 renderView();
 renderSkeleton();
 refresh({ initial: true });
-setInterval(() => {
-  if (!document.hidden && !$("detail").open) refresh();
+let refreshing = false;
+setInterval(async () => {
+  // Pas de nouvelle actualisation tant que la précédente n'est pas finie
+  if (refreshing || document.hidden || $("detail").open) return;
+  refreshing = true;
+  try {
+    await refresh();
+  } finally {
+    refreshing = false;
+  }
 }, LIVE_REFRESH_MS);
 
 // Installable sur téléphone et consultable hors connexion (voir sw.js)

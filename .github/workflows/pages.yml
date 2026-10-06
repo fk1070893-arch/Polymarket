@@ -42,6 +42,10 @@ jobs:
       - id: pages
         uses: actions/configure-pages@v5
 
+      # Début du passage, pour le suivi rapide des alertes en fin de passage
+      - name: Heure de début
+        run: echo "RUN_START=$(date +%s)" >> "$GITHUB_ENV"
+
       # Mémoire des tests en direct (paris pris, caches…), gardée dans la
       # branche « etat », indépendante du site publié
       - name: Récupérer la mémoire des tests
@@ -172,6 +176,29 @@ jobs:
         env:
           PAGES_URL: ${{ steps.pages.outputs.base_url }}
           BACKTEST_FORCE: ${{ inputs.backtest }}
+
+      # GitHub ne lance pas de passage plus d'une fois toutes les 5 minutes :
+      # on occupe la fin du passage à relire les paris suspects toutes les
+      # minutes (et à les copier au prix du moment), pour les voir au plus
+      # tôt. S'arrête vers 4 min 30 de passage, avant le passage suivant.
+      - name: Suivi rapide des alertes (toutes les minutes)
+        continue-on-error: true
+        timeout-minutes: 6
+        env:
+          PAGES_URL: ${{ steps.pages.outputs.base_url }}
+        run: |
+          n=0
+          while :; do
+            next=$(( $(date +%s) + 60 ))
+            [ $(( next - RUN_START )) -lt 270 ] || break
+            sleep $(( next - $(date +%s) ))
+            n=$(( n + 1 ))
+            echo "::group::Relecture $n"
+            node scripts/build-alerts.mjs || true
+            node scripts/build-copy.mjs || true
+            echo "::endgroup::"
+          done
+          echo "$n relecture(s) supplémentaire(s) des alertes"
 
       # Enregistrée même si une étape ou la publication échoue
       - name: Enregistrer la mémoire des tests

@@ -118,7 +118,7 @@ Si ta connexion bloque les domaines Polymarket, le site affiche automatiquement 
 2. Dans **Settings → Pages**, choisir **Source : GitHub Actions**.
 3. Lancer une première fois **Actions → Publier le site → Run workflow**.
 
-Le site est ensuite disponible sur `https://<ton-pseudo>.github.io/Polymarket/` et se met à jour tout seul toutes les 5 minutes (GitHub peut retarder un passage de quelques minutes).
+Le site est ensuite disponible sur `https://<ton-pseudo>.github.io/Polymarket/` et se met à jour tout seul toutes les 5 minutes (GitHub peut retarder un passage de quelques minutes). À la fin de chaque passage, les paris suspects sont relus toutes les minutes (et copiés au prix du moment) jusqu'au passage suivant. Une page ouverte recharge les prix toutes les 30 secondes.
 
 > GitHub Pages est gratuit pour les dépôts **publics**. Pour un dépôt privé, il faut un compte GitHub Pro.
 
