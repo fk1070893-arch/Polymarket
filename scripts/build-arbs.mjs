@@ -20,6 +20,8 @@ const MIN_EDGE = 0.005; // écart minimum (prix affichés) pour vérifier les ca
 const MAX_CHECK = 25; // événements vérifiés dans les carnets à chaque passage
 const MAX_LEGS = 40;
 const KEEP_HISTORY = 30 * DAY;
+const MIN_MARGIN = 0.005; // chaque lot doit rapporter au moins 0,5 % de sa mise
+const MIN_PROFIT = 1; // et l'ensemble au moins 1 $
 
 async function openEvents() {
   const out = [];
@@ -49,7 +51,7 @@ async function check(c) {
   const books = await mapLimit(side.legs, 6, (l) => book(c.side === "yes" ? l.yesToken : l.noToken));
   if (books.some((b) => !b.length)) return { ...c, checked: true, sets: 0, cost: 0, profit: 0 };
   const payout = c.side === "yes" ? 1 : side.legs.length - 1;
-  const r = walkBooks(books, payout);
+  const r = walkBooks(books, payout, { minMargin: MIN_MARGIN });
   return { ...c, checked: true, ...r };
 }
 
@@ -85,7 +87,7 @@ async function main(prev) {
   const checked = [];
   for (const c of candidates.slice(0, MAX_CHECK)) checked.push(await check(c));
   const found = checked
-    .filter((c) => c.profit > 0.01)
+    .filter((c) => c.profit >= MIN_PROFIT)
     .map(({ prices, ...c }) => {
       const days = c.end ? Math.max(1, (c.end - now) / DAY) : null;
       return {
@@ -98,7 +100,7 @@ async function main(prev) {
     })
     .sort((a, b) => b.profit - a.profit);
   console.log(
-    `${checked.length} vérifiés dans les carnets : ${found.length} vraies anomalies` +
+    `${checked.length} vérifiés dans les carnets : ${found.length} vraies anomalies (au moins ${MIN_MARGIN * 100} % et ${MIN_PROFIT} $)` +
       (found.length ? ` (meilleure : +${found[0].profit.toFixed(2)} $ sur ${found[0].cost.toFixed(0)} $ engagés)` : "")
   );
 
@@ -128,7 +130,7 @@ async function main(prev) {
     checked: checked.length,
     found,
     // Écarts affichés qui ne tiennent pas dans les carnets (prix périmés)
-    mirages: checked.filter((c) => !(c.profit > 0.01)).length,
+    mirages: checked.filter((c) => !(c.profit >= MIN_PROFIT)).length,
     history: [...history.values()].sort((a, b) => b.lastSeen - a.lastSeen).slice(0, 100),
   };
 }

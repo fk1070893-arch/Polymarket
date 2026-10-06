@@ -89,6 +89,10 @@ test("carnets d'ordres : on achète tant que le lot coûte moins que ce qu'il ra
   close(r.cost, 9.5);
   close(r.profit, 0.5);
   assert.equal(walkBooks([[], books[1]], 1).sets, 0);
+  // marge minimale : un lot à 0,997 $ pour 1 $ n'en vaut pas la peine
+  const thin = [asksOf({ asks: [{ price: "0.497", size: "1000" }] }), asksOf({ asks: [{ price: "0.5", size: "1000" }] })];
+  assert.equal(walkBooks(thin, 1).sets, 1000);
+  assert.equal(walkBooks(thin, 1, { minMargin: 0.005 }).sets, 0);
 });
 
 // ---------- Bookmakers ----------

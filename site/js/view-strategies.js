@@ -197,7 +197,7 @@ function arbsSection(st) {
   if (st === null) return loading(title);
   const intro = `<p>Dans un événement où <b>une seule issue peut gagner</b> (« Qui va gagner l'élection ? »), les « Oui » doivent valoir 100 % au total.
     S'ils valent moins, acheter toutes les issues rapporte un gain connu d'avance ; s'ils valent plus, c'est l'achat de tous les « Non » qui gagne à coup sûr.
-    Le site vérifie dans les carnets d'ordres combien on aurait vraiment pu acheter.</p>`;
+    Le site vérifie dans les carnets d'ordres combien on aurait vraiment pu acheter, en ne gardant que ce qui rapporte au moins 0,5 % de la mise.</p>`;
   if (!st?.updatedAt) return `<section class="verdict" id="strat-anomalies"><h2>${title}</h2>${intro}<p>Le détecteur démarre au prochain passage de la GitHub Action.</p></section>`;
   const found = st.found ?? [];
   const hist = st.history ?? [];

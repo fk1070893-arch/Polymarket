@@ -75,8 +75,10 @@ export function asksOf(book) {
 // Combien de « lots » (une part de chaque jambe) peut-on acheter en
 // gardant un gain positif, en descendant dans les carnets d'ordres ?
 // payout = ce que rapporte un lot à coup sûr (1 $ pour les « Oui »,
-// n − 1 $ pour les « Non »).
-export function walkBooks(books, payout) {
+// n − 1 $ pour les « Non »). On s'arrête quand un lot de plus rapporte
+// moins de `minMargin` de sa mise : au-delà, on immobilise beaucoup
+// d'argent pour presque rien.
+export function walkBooks(books, payout, { minMargin = 0 } = {}) {
   const levels = books.map((b) => b.map((o) => ({ ...o })));
   const idx = levels.map(() => 0);
   let sets = 0;
@@ -84,7 +86,7 @@ export function walkBooks(books, payout) {
   for (let guard = 0; guard < 10000; guard++) {
     if (levels.some((l, i) => idx[i] >= l.length)) break;
     const unit = levels.reduce((s, l, i) => s + l[idx[i]].price, 0);
-    if (unit >= payout) break;
+    if (payout - unit <= unit * minMargin) break;
     const q = Math.min(...levels.map((l, i) => l[idx[i]].size));
     sets += q;
     cost += q * unit;
