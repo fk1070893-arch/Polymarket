@@ -51,7 +51,12 @@ const QUERIES = [
 ];
 
 async function youngMarkets(now) {
-  for (const [kind, params] of QUERIES) {
+  // Des centaines de marchés courts (crypto au quart d'heure, matchs du jour)
+  // sont créés chaque heure : on ne demande que ceux qui finissent dans plus
+  // de 2,5 jours, sinon on n'atteint jamais les marchés de 5-7 h
+  const longOnly = { end_date_min: new Date(now + MIN_LIFE - 12 * HOUR).toISOString() };
+  for (const [kind, base] of QUERIES) {
+    const params = { ...base, ...longOnly };
     const label = `${kind} trié par ${params.order}`;
     const first = await page(kind, params, 0).catch((err) => {
       console.log(`  ${label} : erreur (${err.message})`);
@@ -64,14 +69,16 @@ async function youngMarkets(now) {
     // Tri du plus récent au plus ancien : on s'arrête une fois passé 7 h
     const out = new Map();
     let cur = first;
-    for (let offset = 0; offset < 1000; ) {
+    let oldestSeen = 0;
+    for (let offset = 0; offset < 3000; ) {
       for (const r of cur.markets) out.set(String(r.id), r);
       const oldest = Math.max(...cur.markets.map((r) => ageOf(r, now)));
+      oldestSeen = Math.max(oldestSeen, oldest);
       if (cur.n < 100 || oldest > AGE[1] + HOUR) break;
       offset += 100;
       cur = await page(kind, params, offset);
     }
-    console.log(`  → ${label} retenu, ${out.size} marchés lus`);
+    console.log(`  → ${label} retenu, ${out.size} marchés lus, jusqu'à ${Math.round(oldestSeen / 60000)} min d'âge`);
     return [...out.values()];
   }
   console.log("Aucune requête ne renvoie de marchés récents");
