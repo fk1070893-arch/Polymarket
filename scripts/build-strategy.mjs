@@ -32,7 +32,7 @@
 import { normalizeMarket } from "../site/js/normalize.js";
 import { groupOf, parseTime } from "./backtest-lib.mjs";
 import { allEventsBetween, loadPrevious, loadState, universeEvents, writeState } from "./lib.mjs";
-import { askPrices, median, paperStats, pnlCurve, settleBets, spreadOf, openByMarket } from "./paper.mjs";
+import { askPrices, median, paperStats, pnlCurve, realCost, settleBets, spreadOf, openByMarket } from "./paper.mjs";
 
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
@@ -170,7 +170,9 @@ async function main(prev) {
       if (known.has(id)) continue;
       const p = m.prices[0];
       if (!(p >= BAND[0] && p <= BAND[1])) continue;
-      const cost = askPrices(raw)[1];
+      // Prix réel pour une mise de 100 $ : écart achat-vente, glissement et frais
+      const rc = await realCost(raw, 1);
+      const cost = rc?.cost ?? null;
       const cap = capFor(fairBy[key], p);
       const b = book[m.id];
       const bookP = b && now - b[2] < BOOK_MAX_AGE ? b[0] : null;
@@ -189,6 +191,10 @@ async function main(prev) {
         mid: 1 - p,
         // Prix réellement payé pour l'autre issue (null si pas d'offre)
         cost,
+        best: rc?.best ?? null,
+        fee: rc?.fee ?? 0,
+        slippage: rc?.slippage ?? null,
+        filled: rc?.filled ?? null,
         cap,
         value: cost != null && cap != null && cost <= cap,
         book: bookP,

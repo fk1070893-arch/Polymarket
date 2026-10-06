@@ -14,7 +14,7 @@ import { GAMMA } from "../site/js/api.js";
 import { normalizeMarket } from "../site/js/normalize.js";
 import { parseTime } from "./backtest-lib.mjs";
 import { getJSON, loadState, universeEvents, writeState } from "./lib.mjs";
-import { askPrices, paperStats, pnlCurve, settleBets, spreadOf, openByMarket } from "./paper.mjs";
+import { askPrices, paperStats, pnlCurve, realCost, settleBets, spreadOf, openByMarket } from "./paper.mjs";
 
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
@@ -144,10 +144,14 @@ async function main(prev) {
     if (!(p >= BAND[0] && p <= BAND[1]) || seenIds[m.id]) continue;
     seen.band++;
     seenIds[m.id] = now;
-    const cost = askPrices(raw)[1];
-    counts[costBucket(cost)]++;
-    // Prix fantôme : pas de vendeur, ou un « Non » bien plus cher qu'affiché
-    if (cost == null || cost > MAX_COST) continue;
+    // Repérage du prix fantôme : meilleur prix vendeur du « Non »
+    const bestAsk = askPrices(raw)[1];
+    counts[costBucket(bestAsk)]++;
+    if (bestAsk == null || bestAsk > MAX_COST) continue;
+    // Prix réel pour une mise de 100 $ : glissement et frais compris
+    const rc = await realCost(raw, 1);
+    const cost = rc?.cost ?? null;
+    if (cost == null) continue;
     seen.bet++;
     const ev = raw.events?.[0];
     bets.push({
@@ -164,6 +168,10 @@ async function main(prev) {
       side: 1,
       mid: 1 - p,
       cost,
+      best: rc.best,
+      fee: rc.fee,
+      slippage: rc.slippage,
+      filled: rc.filled,
       end,
       placedAt: now,
       won: null,

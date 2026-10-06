@@ -14,7 +14,7 @@ const EVENT_FIELDS = ["id", "slug", "title", "image", "icon", "endDate", "startD
 const MARKET_FIELDS = [
   "id", "question", "conditionId", "groupItemTitle", "outcomes", "outcomePrices", "clobTokenIds", "bestBid", "bestAsk",
   "volumeNum", "volume", "endDate", "startDate", "createdAt", "closed", "active", "acceptingOrders", "enableOrderBook",
-  "negRisk", "sportsMarketType", "gameStartTime", "closedTime",
+  "negRisk", "sportsMarketType", "gameStartTime", "closedTime", "takerBaseFee", "makerBaseFee", "feesEnabled",
 ];
 
 const pick = (obj, fields) => Object.fromEntries(fields.filter((f) => obj[f] !== undefined).map((f) => [f, obj[f]]));
@@ -32,7 +32,8 @@ try {
   }));
   await writeCache("universe.json", { readAt: now, complete: Date.now() < started + 3 * 60000, events: slim });
   const markets = slim.reduce((s, ev) => s + ev.markets.length, 0);
-  console.log(`${slim.length} événements ouverts (${markets} marchés) lus en ${Math.round((Date.now() - started) / 1000)} s`);
+  const withFee = slim.reduce((s, ev) => s + ev.markets.filter((m) => Number(m.takerBaseFee) > 0).length, 0);
+  console.log(`${slim.length} événements ouverts (${markets} marchés, dont ${withFee} avec frais preneur) lus en ${Math.round((Date.now() - started) / 1000)} s`);
 } catch (err) {
   console.log(`::warning::Lecture de Polymarket en échec : ${err.message} (chaque étape relira l'API)`);
 }

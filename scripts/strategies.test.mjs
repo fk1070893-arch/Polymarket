@@ -93,6 +93,10 @@ test("carnets d'ordres : on achète tant que le lot coûte moins que ce qu'il ra
   const thin = [asksOf({ asks: [{ price: "0.497", size: "1000" }] }), asksOf({ asks: [{ price: "0.5", size: "1000" }] })];
   assert.equal(walkBooks(thin, 1).sets, 1000);
   assert.equal(walkBooks(thin, 1, { minMargin: 0.005 }).sets, 0);
+  // frais : 2 % × min(p, 1 − p) par part rendent le lot à 0,95 $ non rentable au-delà de la marge
+  const cheap = [asksOf({ asks: [{ price: "0.47", size: "10" }] }), asksOf({ asks: [{ price: "0.48", size: "10" }] })];
+  close(walkBooks(cheap, 1).profit, 0.5);
+  assert.ok(walkBooks(cheap, 1, { fees: [0.02, 0.02] }).profit < 0.5);
 });
 
 // ---------- Bookmakers ----------
@@ -148,6 +152,12 @@ test("marchés Polymarket comparables aux cotes", () => {
 });
 
 // ---------- Backtest au prix payé ----------
+
+test("les frais s'ajoutent au prix payé", () => {
+  const s = { p: 0.7, outcome: 0, hs: 0.02, fee: 0.1 };
+  // « Non » : 0,32 + 10 % × min(0,32 ; 0,68) = 0,352
+  close(roiNoExec(s), 1 / 0.352 - 1);
+});
 
 test("le gain au prix payé tient compte de l'écart achat-vente", () => {
   const s = { p: 0.7, outcome: 0, hs: 0.02 };

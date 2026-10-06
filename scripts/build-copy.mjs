@@ -12,7 +12,7 @@
 import { normalizeMarket } from "../site/js/normalize.js";
 import { parseTime } from "./backtest-lib.mjs";
 import { loadState, readData, writeState } from "./lib.mjs";
-import { askPrices, fetchMarketsByCondition, paperStats, pnlCurve, roiAt, settleBets, openByMarket } from "./paper.mjs";
+import { fetchMarketsByCondition, paperStats, pnlCurve, realCost, roiAt, settleBets, openByMarket } from "./paper.mjs";
 
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
@@ -55,7 +55,9 @@ async function main(prev, alerts) {
       skipped++;
       continue;
     }
-    const cost = askPrices(raw)[a.outcomeIndex];
+    // Prix réel pour une mise de 100 $ : écart achat-vente, glissement et frais
+    const rc = await realCost(raw, a.outcomeIndex);
+    const cost = rc?.cost ?? null;
     if (cost == null || cost > MAX_COST) {
       skipped++;
       continue;
@@ -74,6 +76,10 @@ async function main(prev, alerts) {
       insiderPrice: a.price,
       insiderCash: a.cash,
       cost,
+      best: rc.best,
+      fee: rc.fee,
+      slippage: rc.slippage,
+      filled: rc.filled,
       mid: m.prices[a.outcomeIndex] ?? null,
       end: parseTime(raw.endDate),
       placedAt: now,

@@ -2,7 +2,7 @@
 // différentes stratégies : prix réellement payé, règlement à la clôture et
 // statistiques avec marge d'erreur.
 
-import { GAMMA } from "../site/js/api.js";
+import { CLOB, GAMMA } from "../site/js/api.js";
 import { normalizeMarket, winnerIndex } from "../site/js/normalize.js";
 import { bootstrapCI } from "./backtest-lib.mjs";
 import { getJSON } from "./lib.mjs";
@@ -11,6 +11,81 @@ const num = (v) => {
   const n = typeof v === "string" ? parseFloat(v) : v;
   return Number.isFinite(n) ? n : null;
 };
+
+// ---------- Coût réel d'un achat ----------
+//
+// Ce qu'on paie vraiment pour une mise de STAKE $, en plus du prix affiché :
+//  - l'écart achat-vente : on achète au prix vendeur, pas au prix affiché ;
+//  - le glissement : une grosse mise épuise les meilleures offres et descend
+//    dans le carnet d'ordres, à des prix de plus en plus chers ;
+//  - les frais Polymarket (preneur), présents sur certains marchés :
+//    taux × min(prix, 1 − prix) par part, d'après la grille de Polymarket.
+// Ne sont pas comptés : le réseau (Polygon, payé par Polymarket), le dépôt
+// et le retrait d'argent (une fois, pas à chaque pari).
+
+export const STAKE = 100; // mise de référence pour le glissement
+
+// Taux de frais preneur d'un marché (0 sur la plupart des marchés)
+export function feeRate(raw) {
+  const bps = num(raw?.takerBaseFee ?? raw?.taker_base_fee ?? raw?.takerFee);
+  return bps != null && bps > 0 ? bps / 10000 : 0;
+}
+
+export const feePerShare = (rate, price) => rate * Math.min(price, 1 - price);
+
+// Prix moyen payé pour `stake` $ en descendant dans les offres de vente
+// (triées du moins cher au plus cher). Retourne { avg, spent } ou null.
+export function walkAsks(asks, stake) {
+  let spent = 0;
+  let shares = 0;
+  for (const o of asks) {
+    if (spent >= stake - 1e-9) break;
+    const dollars = Math.min(o.price * o.size, stake - spent);
+    spent += dollars;
+    shares += dollars / o.price;
+  }
+  return shares > 0 ? { avg: spent / shares, spent } : null;
+}
+
+function tokenIds(raw) {
+  try {
+    const t = Array.isArray(raw.clobTokenIds) ? raw.clobTokenIds : JSON.parse(raw.clobTokenIds ?? "[]");
+    return t.map(String);
+  } catch {
+    return [];
+  }
+}
+
+// Coût réel par part de 1 $ pour acheter l'issue `side` avec `stake` $ :
+//  { cost, best, fee, filled, slippage } ; repli sur le meilleur prix
+// vendeur (sans glissement) si le carnet d'ordres ne répond pas.
+export async function realCost(raw, side, stake = STAKE) {
+  const rate = feeRate(raw);
+  const best = askPrices(raw)[side];
+  const token = tokenIds(raw)[side];
+  let walked = null;
+  if (token) {
+    const book = await getJSON(`${CLOB}/book?token_id=${encodeURIComponent(token)}`, 2).catch(() => null);
+    const asks = (book?.asks ?? [])
+      .map((o) => ({ price: num(o.price), size: num(o.size) }))
+      .filter((o) => o.price > 0 && o.price < 1 && o.size > 0)
+      .sort((a, b) => a.price - b.price);
+    walked = walkAsks(asks, stake);
+  }
+  const price = walked?.avg ?? best;
+  if (price == null) return null;
+  const fee = feePerShare(rate, price);
+  const r = (v) => Math.round(v * 10000) / 10000;
+  return {
+    cost: r(Math.min(0.999, price + fee)),
+    best: best != null ? r(best + feePerShare(rate, best)) : null,
+    fee: r(fee),
+    feeRate: rate,
+    // Montant réellement achetable (le carnet peut être trop mince)
+    filled: walked ? Math.round(walked.spent * 100) / 100 : null,
+    slippage: walked && best != null ? r(walked.avg - best) : null,
+  };
+}
 
 // Prix auquel on peut ACHETER chaque issue d'un marché à deux issues.
 // Gamma donne le meilleur prix acheteur / vendeur de la première issue ;

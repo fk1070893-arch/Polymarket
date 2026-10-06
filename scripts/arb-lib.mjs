@@ -48,6 +48,8 @@ export function eventPrices(ev) {
       bid: bid != null && bid > 0 && bid < 1 ? bid : null,
       ask: ask != null && ask > 0 && ask < 1 ? ask : null,
       tradable: m.acceptingOrders !== false && m.enableOrderBook !== false,
+      // Frais preneur du marché (0 sur la plupart), en fraction
+      fee: (num(m.takerBaseFee) ?? 0) > 0 ? num(m.takerBaseFee) / 10000 : 0,
     };
   });
 
@@ -78,14 +80,18 @@ export function asksOf(book) {
 // n − 1 $ pour les « Non »). On s'arrête quand un lot de plus rapporte
 // moins de `minMargin` de sa mise : au-delà, on immobilise beaucoup
 // d'argent pour presque rien.
-export function walkBooks(books, payout, { minMargin = 0 } = {}) {
+// fees[i] : taux de frais de chaque jambe (frais par part = taux × min(p, 1 − p)).
+export function walkBooks(books, payout, { minMargin = 0, fees = [] } = {}) {
   const levels = books.map((b) => b.map((o) => ({ ...o })));
   const idx = levels.map(() => 0);
   let sets = 0;
   let cost = 0;
   for (let guard = 0; guard < 10000; guard++) {
     if (levels.some((l, i) => idx[i] >= l.length)) break;
-    const unit = levels.reduce((s, l, i) => s + l[idx[i]].price, 0);
+    const unit = levels.reduce((s, l, i) => {
+      const p = l[idx[i]].price;
+      return s + p + (fees[i] ?? 0) * Math.min(p, 1 - p);
+    }, 0);
     if (payout - unit <= unit * minMargin) break;
     const q = Math.min(...levels.map((l, i) => l[idx[i]].size));
     sets += q;

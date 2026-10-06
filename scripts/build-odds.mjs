@@ -18,7 +18,7 @@ import { normalizeMarket } from "../site/js/normalize.js";
 import { groupOf, parseTime } from "./backtest-lib.mjs";
 import { allEventsBetween, loadState, universeEvents, writeState } from "./lib.mjs";
 import { gameProbs, marketTargets, sameGame, sideProbs } from "./odds-lib.mjs";
-import { askPrices, paperStats, pnlCurve, settleBets, openByMarket } from "./paper.mjs";
+import { askPrices, paperStats, pnlCurve, realCost, settleBets, openByMarket } from "./paper.mjs";
 
 const ODDS = "https://api.the-odds-api.com/v4";
 // Un espace ou un retour à la ligne collé avec la clé la ferait refuser
@@ -143,6 +143,7 @@ function compare(state, events, now) {
   const games = Object.values(state.odds ?? {}).flatMap((c) => c.games.map((g) => ({ ...g, fetchedAt: c.fetchedAt })));
   const upcoming = games.filter((g) => g.commence > now - GAME_LENGTH && g.commence < now + 3 * DAY);
   const rows = [];
+  const raws = new Map(); // marché brut, pour calculer le prix réel au moment de parier
   let matched = 0;
   for (const g of upcoming) {
     const evs = events.filter((ev) => {
@@ -158,6 +159,7 @@ function compare(state, events, now) {
         const probs = sideProbs(marketTargets(raw, m.outcomes, g, names), g.probs);
         if (!probs) continue;
         const asks = askPrices(raw);
+        raws.set(m.id, raw);
         for (const side of [0, 1]) {
           rows.push({
             marketId: m.id,
@@ -179,7 +181,7 @@ function compare(state, events, now) {
       }
     }
   }
-  return { rows, matched, upcoming: upcoming.length };
+  return { rows, raws, matched, upcoming: upcoming.length };
 }
 
 async function main(prev) {
@@ -213,7 +215,12 @@ async function main(prev) {
       if (r.commence <= now || r.commence - now > BET_WINDOW || known.has(r.event)) continue;
       if (!best.has(r.event) || best.get(r.event).edge < r.edge) best.set(r.event, r);
     }
+    let added = 0;
     for (const r of best.values()) {
+      // L'écart doit tenir au prix réel d'une mise de 100 $ (glissement et frais compris)
+      const rc = await realCost(cmp.raws.get(r.marketId), r.side);
+      if (!rc || r.book - rc.cost < MIN_EDGE || rc.cost > MAX_COST) continue;
+      added++;
       bets.push({
         id: `${r.marketId}:${r.side}`,
         marketId: r.marketId,
@@ -224,16 +231,20 @@ async function main(prev) {
         side: r.side,
         book: r.book,
         source: r.source,
-        cost: r.ask,
+        cost: rc.cost,
+        best: rc.best,
+        fee: rc.fee,
+        slippage: rc.slippage,
+        filled: rc.filled,
         mid: r.mid,
-        edge: r.edge,
+        edge: r.book - rc.cost,
         end: r.commence + GAME_LENGTH,
         placedAt: now,
         won: null,
         roi: null,
       });
     }
-    console.log(`${best.size} nouveaux paris fictifs`);
+    console.log(`${added} nouveaux paris fictifs (${best.size - added} écarts qui ne tiennent pas au prix réel)`);
 
     // Suivi de précision : dernières probabilités avant le début du match
     const byId = new Map(track.map((t) => [t.marketId, t]));

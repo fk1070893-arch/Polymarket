@@ -57,6 +57,8 @@ function compactMarkets(events) {
         p: m.prices[0],
         bid: raw.bestBid ?? null,
         ask: raw.bestAsk ?? null,
+        tokens: raw.clobTokenIds ?? null,
+        fee: raw.takerBaseFee ?? null,
         volume: Math.round(m.volume),
         end: parseTime(raw.endDate) ?? parseTime(ev.endDate),
       });
@@ -74,7 +76,8 @@ async function check(c) {
   const books = await mapLimit(side.legs, 6, (l) => book(c.side === "yes" ? l.yesToken : l.noToken));
   if (books.some((b) => !b.length)) return { ...c, checked: true, sets: 0, cost: 0, profit: 0 };
   const payout = c.side === "yes" ? 1 : side.legs.length - 1;
-  const r = walkBooks(books, payout, { minMargin: MIN_MARGIN });
+  // Frais de chaque jambe compris (0 sur la plupart des marchés)
+  const r = walkBooks(books, payout, { minMargin: MIN_MARGIN, fees: side.legs.map((l) => l.fee ?? 0) });
   return { ...c, checked: true, ...r };
 }
 

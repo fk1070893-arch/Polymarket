@@ -5,15 +5,17 @@
 //  - marché en cours : valeur si on revendait maintenant (meilleur prix
 //    acheteur actuel / prix d'achat − 1).
 // Prix d'achat : celui réellement obtenu par le test « copier les alertes »
-// quand il a pu copier l'alerte, sinon celui du wallet suspect (impossible à
-// avoir en vrai : c'est le cas le plus favorable, signalé comme tel).
+// quand il a pu copier l'alerte (mise de 100 $, glissement et frais compris),
+// sinon celui du wallet suspect plus les frais du marché (impossible à avoir
+// en vrai : c'est le cas le plus favorable, signalé comme tel). Revente au
+// meilleur prix acheteur, frais déduits.
 // Résultat : site/data/alerts-review.json
 //
 // Usage : node scripts/build-alerts-review.mjs (après build-alerts et build-copy)
 
 import { normalizeMarket, winnerIndex } from "../site/js/normalize.js";
 import { readData, readState, writeData } from "./lib.mjs";
-import { fetchMarketsByCondition } from "./paper.mjs";
+import { feePerShare, feeRate, fetchMarketsByCondition } from "./paper.mjs";
 
 const HOUR = 3600000;
 const WINDOWS = { "24h": 24 * HOUR, "7j": 7 * 24 * HOUR };
@@ -67,7 +69,8 @@ try {
     const raw = markets.get(a.conditionId);
     const side = a.outcomeIndex;
     const cost = copied.get(a.id);
-    const entry = cost ?? a.price;
+    const rate = feeRate(raw);
+    const entry = cost ?? (a.price > 0 ? Math.min(0.999, a.price + feePerShare(rate, a.price)) : a.price);
     const base = {
       id: a.id,
       ts: a.ts,
@@ -85,8 +88,9 @@ try {
     const m = normalizeMarket(raw);
     const w = winnerIndex({ ...m, closed: raw.closed === true });
     if (w != null) return { ...base, status: w === side ? "won" : "lost", roi: w === side ? 1 / entry - 1 : -1 };
-    const sell = sellPrice(raw, side) ?? m.prices[side] ?? null;
-    if (sell == null) return { ...base, status: "unknown", roi: 0 };
+    const bid = sellPrice(raw, side) ?? m.prices[side] ?? null;
+    if (bid == null) return { ...base, status: "unknown", roi: 0 };
+    const sell = Math.max(0, bid - feePerShare(rate, bid));
     return { ...base, status: "open", now: sell, roi: sell / entry - 1 };
   });
 

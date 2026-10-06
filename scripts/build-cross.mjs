@@ -20,7 +20,7 @@ import { normalizeMarket } from "../site/js/normalize.js";
 import { parseTime } from "./backtest-lib.mjs";
 import { allEventsBetween, getJSON, loadState, readCache, writeState } from "./lib.mjs";
 import { bestMatch, buildIndex } from "./match-lib.mjs";
-import { paperStats, pnlCurve, settleBets, openByMarket } from "./paper.mjs";
+import { feePerShare, feeRate, paperStats, pnlCurve, realCost, settleBets, openByMarket } from "./paper.mjs";
 
 const KALSHI = "https://api.elections.kalshi.com/trade-api/v2";
 const DAY = 86400000;
@@ -52,16 +52,21 @@ async function polymarket(now) {
     for (const raw of ev.markets ?? []) {
       const m = normalizeMarket(raw);
       if (m.closed || !m.active || m.outcomes.length !== 2 || !m.prices.length) continue;
-      out.push({ id: m.id, q: m.question, event: String(ev.id), eventTitle: ev.title ?? "", slug: ev.slug ?? "", outcomes: m.outcomes, p: m.prices[0], bid: raw.bestBid ?? null, ask: raw.bestAsk ?? null, volume: Math.round(m.volume), end: parseTime(raw.endDate) ?? parseTime(ev.endDate) });
+      out.push({ id: m.id, q: m.question, event: String(ev.id), eventTitle: ev.title ?? "", slug: ev.slug ?? "", outcomes: m.outcomes, p: m.prices[0], bid: raw.bestBid ?? null, ask: raw.bestAsk ?? null, tokens: raw.clobTokenIds ?? null, fee: raw.takerBaseFee ?? null, volume: Math.round(m.volume), end: parseTime(raw.endDate) ?? parseTime(ev.endDate) });
     }
   return out;
 }
 
-// Prix d'achat de chaque issue sur Polymarket
+// Marché compact -> forme attendue par realCost / feeRate
+const asRaw = (m) => ({ bestBid: m.bid, bestAsk: m.ask, clobTokenIds: m.tokens, takerBaseFee: m.fee });
+
+// Prix d'achat de chaque issue sur Polymarket, frais compris (sans glissement)
 function pmAsks(m) {
   const bid = quote(num(m.bid));
   const ask = quote(num(m.ask));
-  return [ask, bid != null ? 1 - bid : null];
+  const rate = feeRate(asRaw(m));
+  const withFee = (p) => (p == null ? null : p + feePerShare(rate, p));
+  return [withFee(ask), withFee(bid != null ? 1 - bid : null)];
 }
 
 // ---------- Kalshi ----------
@@ -208,6 +213,7 @@ async function main(prev) {
 
   const pairs = [];
   const arbs = [];
+  const pmById = new Map(pm.map((m) => [m.id, m]));
   for (const k of kalshi) {
     const hit = bestMatch(index, k.text, { min: MIN_SIM, accept: near(k.end, 2) });
     if (!hit) continue;
@@ -258,6 +264,10 @@ async function main(prev) {
   for (const p of pairs) {
     if (known.has(p.marketId) || p.sim < MIN_SIM_BET || p.edge == null || p.edge < MIN_GAP || p.ask > MAX_COST) continue;
     if (p.end != null && p.end < now) continue;
+    // L'écart doit tenir au prix réel d'une mise de 100 $ (glissement et frais compris)
+    const kp = p.side === 0 ? p.kalshi.mid : 1 - p.kalshi.mid;
+    const rc = await realCost(asRaw(pmById.get(p.marketId) ?? {}), p.side);
+    if (!rc || kp - rc.cost < MIN_GAP || rc.cost > MAX_COST) continue;
     bets.push({
       id: p.marketId,
       marketId: p.marketId,
@@ -269,9 +279,13 @@ async function main(prev) {
       kalshi: p.side === 0 ? p.kalshi.mid : 1 - p.kalshi.mid,
       kalshiText: p.kalshi.text,
       sim: p.sim,
-      cost: p.ask,
+      cost: rc.cost,
+      best: rc.best,
+      fee: rc.fee,
+      slippage: rc.slippage,
+      filled: rc.filled,
       mid: p.side === 0 ? p.pmMid : 1 - p.pmMid,
-      edge: p.edge,
+      edge: kp - rc.cost,
       end: p.end,
       placedAt: now,
       won: null,

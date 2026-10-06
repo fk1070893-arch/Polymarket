@@ -105,9 +105,9 @@ function renderReview(ctx) {
                 )
                 .join("")}</tbody>
             </table></div>
-            <p class="muted small">Prix d'achat : celui réellement obtenu par le test « copier les alertes » pour ${w.realPrice} alerte${w.realPrice > 1 ? "s" : ""} sur ${w.n} ;
-              pour les autres, celui payé par le wallet suspect, impossible à obtenir en le copiant (le résultat réel serait moins bon).
-              « Si revendu maintenant » utilise le meilleur prix d'achat actuel. La plupart des marchés ne sont pas encore terminés : ce total bouge à chaque actualisation.
+            <p class="muted small">Prix d'achat : celui réellement obtenu par le test « copier les alertes » pour ${w.realPrice} alerte${w.realPrice > 1 ? "s" : ""} sur ${w.n}
+              (mise de 100 $, glissement et frais compris) ; pour les autres, celui payé par le wallet suspect plus les frais du marché, impossible à obtenir en le copiant (le résultat réel serait moins bon).
+              « Si revendu maintenant » utilise le meilleur prix d'achat actuel, frais déduits (sans le glissement à la revente). La plupart des marchés ne sont pas encore terminés : ce total bouge à chaque actualisation.
               Mis à jour ${timeAgo(new Date(data.updatedAt).getTime())}.</p>`
           : `<p>Aucune alerte sur cette période.</p>`
       }

@@ -30,7 +30,7 @@ function verdict(s) {
           : `<b>Pas encore de conclusion : le résultat peut encore s'expliquer par le hasard.</b>`;
   const pnl = s.pnl ?? 0;
   return `<p>Les issues choisies ont gagné <b>${pct(s.winRate)}</b> du temps (${s.wins}/${s.n}) ; leur prix annonçait <b>${pct(s.expectedWinRate)}</b>.
-    Gain moyen <b>au prix réellement payé</b> : <b class="${cls(s.roi)}">${sp(s.roi)}</b> par pari${s.ci ? `, marge d'erreur ${ciText(s.ci)}` : ""}
+    Gain moyen <b>au prix réellement payé</b> <span class="muted small">(mise de 100 $ : écart achat-vente, glissement et frais compris)</span> : <b class="${cls(s.roi)}">${sp(s.roi)}</b> par pari${s.ci ? `, marge d'erreur ${ciText(s.ci)}` : ""}
     (${pnl >= 0 ? "+" : "−"}${money.format(Math.abs(pnl))} pour ${n} $ misés)${
       s.roiMid != null ? `. Au prix affiché, ç'aurait été ${sp(s.roiMid)}` : ""
     }.</p><p>${line}</p>`;
@@ -49,6 +49,15 @@ function betStatus(b) {
     return `<span class="muted">${b.end && b.end > Date.now() ? `fin dans ${duration((b.end - Date.now()) / 1000)}` : "résultat en attente"}</span>`;
   }
   return b.won ? `<span class="up"><b>Gagné ${sp(b.roi ?? b.roiMid)}</b></span>` : `<span class="down"><b>Perdu</b></span>`;
+}
+
+// Ce que le prix payé comprend en plus du meilleur prix : « dont glissement +1 ¢, frais 0,5 ¢ »
+function costDetail(b) {
+  const parts = [];
+  if (b.slippage > 0.0005) parts.push(`glissement +${(b.slippage * 100).toFixed(1).replace(".", ",")} ¢`);
+  if (b.fee > 0.0005) parts.push(`frais ${(b.fee * 100).toFixed(1).replace(".", ",")} ¢`);
+  if (b.filled != null && b.filled < 99) parts.push(`seulement ${Math.round(b.filled)} $ achetables`);
+  return parts.length ? ` <span class="muted small">(dont ${parts.join(", ")})</span>` : "";
 }
 
 function betList(bets, describe) {
@@ -123,7 +132,7 @@ function favoritesSection(st) {
         sub: `${b.question !== b.eventTitle ? `${esc(b.question)} · ` : ""}favori ${esc(b.favorite)} à ${pct(b.p)} · ${WHEN_LABEL[b.when ?? "24h"]}${
           b.book != null ? ` · bookmakers ${pct(b.book)}` : ""
         }`,
-        pick: `1 $ sur <b>${esc(b.bet)}</b> à ${b.cost != null ? cents(b.cost) : `${cents(1 - b.p)} <span class="muted small">(prix affiché)</span>`}${
+        pick: `1 $ sur <b>${esc(b.bet)}</b> à ${b.cost != null ? cents(b.cost) + costDetail(b) : `${cents(1 - b.p)} <span class="muted small">(prix affiché)</span>`}${
           b.value ? ` <span class="flag good">✓ bon prix</span>` : ""
         }`,
       }))}
@@ -157,7 +166,7 @@ function copySection(st) {
       ${betList(st.bets, (b) => ({
         title: b.eventTitle || b.question,
         sub: `${b.question !== b.eventTitle ? `${esc(b.question)} · ` : ""}alerte ${b.score}/100, le wallet a payé ${cents(b.insiderPrice)}`,
-        pick: `1 $ sur <b>${esc(b.outcome === "Yes" ? "Oui" : b.outcome === "No" ? "Non" : b.outcome)}</b> à ${cents(b.cost)}`,
+        pick: `1 $ sur <b>${esc(b.outcome === "Yes" ? "Oui" : b.outcome === "No" ? "Non" : b.outcome)}</b> à ${cents(b.cost)}${costDetail(b)}`,
       }))}
     </section>`;
 }
@@ -216,7 +225,7 @@ function oddsSection(st) {
       ${betList(st.bets, (b) => ({
         title: b.eventTitle || b.question,
         sub: `bookmakers ${pct(b.book)} (${esc(b.source)}) · écart ${Math.round(b.edge * 100)} pts`,
-        pick: `1 $ sur <b>${esc(b.outcome === "Yes" ? b.question : b.outcome)}</b> à ${cents(b.cost)}`,
+        pick: `1 $ sur <b>${esc(b.outcome === "Yes" ? b.question : b.outcome)}</b> à ${cents(b.cost)}${costDetail(b)}`,
       }))}
     </section>`;
 }
@@ -256,7 +265,7 @@ function freshSection(st) {
       ${betList(st.bets, (b) => ({
         title: b.eventTitle || b.question,
         sub: `${b.question !== b.eventTitle ? `${esc(b.question)} · ` : ""}affiché ${pct(b.p)}${b.multi ? " · plusieurs candidats" : ""}`,
-        pick: `1 $ sur <b>Non</b> à ${cents(b.cost)} <span class="muted small">(affiché ${cents(b.mid)})</span>`,
+        pick: `1 $ sur <b>Non</b> à ${cents(b.cost)}${costDetail(b)} <span class="muted small">(affiché ${cents(b.mid)})</span>`,
       }))}
     </section>`;
 }
@@ -372,7 +381,7 @@ function crossSection(st) {
       ${betList(st.bets, (b) => ({
         title: b.eventTitle || b.question,
         sub: `${b.question !== b.eventTitle ? `${esc(b.question)} · ` : ""}Kalshi ${pct(b.kalshi)} · écart ${Math.round(b.edge * 100)} pts`,
-        pick: `1 $ sur <b>${esc(yesNo(b.outcome))}</b> à ${cents(b.cost)}`,
+        pick: `1 $ sur <b>${esc(yesNo(b.outcome))}</b> à ${cents(b.cost)}${costDetail(b)}`,
       }))}
       <h3>Second avis : Metaculus</h3>
       <p>Les prévisions d'une communauté de prévisionnistes, réputées bien calibrées en géopolitique, science et technologie. Pas de pari ici, seulement une comparaison.</p>
@@ -471,7 +480,8 @@ export function renderStrategies(ctx) {
       <h2>Comment lire ces tests</h2>
       <ul>
         <li><b>Rien n'est misé :</b> ce sont des paris fictifs de 1 $, enregistrés au moment où on les aurait pris, puis réglés à la fin du marché.</li>
-        <li><b>Prix réellement payé :</b> on achète au meilleur prix vendeur du moment, pas au prix affiché (le milieu entre achat et vente). Sur les petits marchés, la différence peut manger tout le gain.</li>
+        <li><b>Prix réellement payé :</b> chaque pari est compté comme une mise de 100 $ : on achète au prix vendeur (pas au prix affiché), en descendant dans le carnet d'ordres tant que la mise n'est pas complète (le <b>glissement</b>), plus les <b>frais</b> Polymarket quand le marché en prend. Sur les petits marchés, ces coûts peuvent manger tout le gain. Les paris enregistrés avant le 6 octobre au soir ne comptent que le meilleur prix vendeur.</li>
+        <li><b>Non compté :</b> le réseau (payé par Polymarket), le dépôt et le retrait d'argent (une fois, pas à chaque pari), et le fait que nos propres achats feraient bouger les prix suivants.</li>
         <li><b>Il faut du volume :</b> en dessous de 50 paris réglés, le hasard domine. La marge d'erreur entre crochets dit si le résultat peut encore être de la chance.</li>
         <li><b>Plusieurs idées testées :</b> plus on teste de stratégies, plus l'une d'elles finira par « gagner » par hasard. Une stratégie n'est crédible que si elle gagne sur la durée.</li>
       </ul>

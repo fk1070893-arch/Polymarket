@@ -110,12 +110,15 @@ export function roiNo(p, outcome) {
 }
 
 // Même chose au prix réellement payé : on achète au prix vendeur, soit le
-// prix affiché + la moitié de l'écart achat-vente (s.hs).
+// prix affiché + la moitié de l'écart achat-vente (s.hs), plus les frais
+// preneur du marché s'il en a (s.fee × min(prix, 1 − prix) par part).
+const withFee = (cost, fee) => Math.min(0.999, cost + (fee ?? 0) * Math.min(cost, 1 - cost));
 export function roiYesExec(s) {
-  return roiYes(Math.min(0.999, s.p + (s.hs ?? 0)), s.outcome);
+  return roiYes(withFee(Math.min(0.999, s.p + (s.hs ?? 0)), s.fee), s.outcome);
 }
 export function roiNoExec(s) {
-  return roiNo(Math.max(0.001, s.p - (s.hs ?? 0)), s.outcome);
+  const costNo = withFee(Math.min(0.999, 1 - s.p + (s.hs ?? 0)), s.fee);
+  return roiNo(1 - costNo, s.outcome);
 }
 
 function binIndex(p) {
