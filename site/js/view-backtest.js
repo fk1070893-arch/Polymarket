@@ -317,6 +317,12 @@ function strategySection(st) {
       </div>
       ${verdict}
       ${
+        s.all?.n
+          ? `<p class="muted small">Comptés comme dans le backtest : les marchés finis avec au moins 1 000 $ de volume (${s.n ?? 0}).
+              Sur tous les paris réglés (${s.all.n}), y compris les petits marchés : ${sp(s.all.roi)} par pari.</p>`
+          : ""
+      }
+      ${
         recent.length
           ? `<h3>Derniers paris fictifs</h3><div class="strat-bets">${recent
               .map((b) => {
