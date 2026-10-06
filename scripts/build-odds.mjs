@@ -22,7 +22,8 @@ import { gameProbs, marketTargets, sameGame, sideProbs } from "./odds-lib.mjs";
 import { askPrices, paperStats, settleBets } from "./paper.mjs";
 
 const ODDS = "https://api.the-odds-api.com/v4";
-const KEY = process.env.ODDS_API_KEY ?? "";
+// Un espace ou un retour à la ligne collé avec la clé la ferait refuser
+const KEY = (process.env.ODDS_API_KEY ?? "").trim();
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
 const MIN_EDGE = 0.03; // Polymarket au moins 3 pts moins cher que les bookmakers
