@@ -122,7 +122,7 @@ jobs:
         continue-on-error: true
         timeout-minutes: 2
 
-      # D'où vient l'argent des wallets suspects gagnants (une fois par heure)
+      # D'où vient l'argent des wallets suspects (founder, relais, origine)
       - name: Pistes des wallets suspects
         run: node scripts/build-wallets.mjs
         continue-on-error: true

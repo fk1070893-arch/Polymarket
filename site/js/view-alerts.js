@@ -283,6 +283,7 @@ const KIND_FR = {
   plateforme: ["Plateforme (échange, pont)", ""],
   contrat: ["Contrat", ""],
   wallet: ["Wallet personnel", "alert"],
+  relais: ["Wallet relais (neuf)", ""],
 };
 const profile = (addr, text) => `<a href="https://polymarket.com/profile/${esc(addr)}" target="_blank" rel="noopener noreferrer">${text}</a>`;
 const scan = (addr) => `<a href="https://polygonscan.com/address/${esc(addr)}" target="_blank" rel="noopener noreferrer">${shortAddress(addr)}</a>`;
@@ -300,6 +301,32 @@ function funderLine(f) {
   }</li>`;
 }
 
+// Nom court d'une adresse de la chaîne : pseudo Polymarket, nom public ou adresse
+function who(f) {
+  if (f.kind === "polymarket" && f.pm) return profile(f.pm.proxy, f.pm.name ? `<b>${esc(f.pm.name)}</b>` : shortAddress(f.pm.proxy));
+  return `${f.label ? `<b>${esc(f.label)}</b> ` : ""}${scan(f.address)}`;
+}
+
+// Chaîne de l'argent : origine → relais → … → wallet suspect
+function chainText(chain) {
+  return [...chain]
+    .reverse()
+    .map((f) => `${who(f)} <span class="muted small">(${(KIND_FR[f.kind] ?? KIND_FR.wallet)[0].toLowerCase()}, ${usd0.format(f.amount)})</span>`)
+    .join(" → ");
+}
+
+// Ligne « D'où vient l'argent » sous chaque alerte
+function founderLine(state, a) {
+  const e = state.walletTrails?.byWallet?.[String(a.wallet ?? "").toLowerCase()];
+  if (!e) return "";
+  if (!e.founder) return e.error ? "" : `<p class="alert-founder muted small">Founder : aucun dépôt en dollars trouvé juste avant ses paris.</p>`;
+  const o = e.origin;
+  const [kind, tone] = KIND_FR[o.kind] ?? KIND_FR.wallet;
+  const via = e.hops > 1 ? ` <span class="muted">via ${e.hops - 1} wallet${e.hops > 2 ? "s" : ""} relais</span>` : "";
+  const many = (o.shared ?? 1) > 1 ? ` · <b class="down">derrière ${o.shared} wallets suspects</b>` : "";
+  return `<p class="alert-founder small">Argent venu de ${who(o)} <span class="flag ${tone}">${kind}</span>${via}${many}</p>`;
+}
+
 function renderTrails(ctx) {
   const box = $("alerts-trails");
   const data = ctx.state.walletTrails;
@@ -312,7 +339,8 @@ function renderTrails(ctx) {
   box.innerHTML = `
     <section class="verdict trails">
       <h2>D'où vient l'argent des wallets suspects gagnants ?</h2>
-      <p class="muted small">Wallets de moins de 30 jours dont les alertes ont gagné (${data.candidates ?? data.wallets.length}) : leurs premiers dépôts en dollars, lus sur la blockchain Polygon (publique).
+      <p class="muted small">Wallets de moins de 30 jours dont les alertes ont gagné (${data.candidates ?? data.wallets.length}) : qui leur a envoyé leurs dollars juste avant leurs premiers paris (le founder), lu sur la blockchain Polygon (publique).
+        Quand le founder est un wallet neuf qui ne sert que de relais, le site remonte jusqu'à 3 étages. Le founder de chaque alerte est aussi indiqué sous l'alerte.
         Si l'argent vient d'un autre compte Polymarket, c'est sans doute le compte principal de la même personne. Un transfert ne le prouve pas (ça peut être un paiement),
         et beaucoup viennent d'une plateforme d'échange : piste froide. Mis à jour ${timeAgo(new Date(data.updatedAt).getTime())}.</p>
       ${
@@ -345,6 +373,7 @@ function renderTrails(ctx) {
                   ? `<p class="trail-main">Compte principal probable : ${profile(w.main.proxy, w.main.name ? `<b>${esc(w.main.name)}</b>` : shortAddress(w.main.proxy))}</p>`
                   : ""
               }
+              ${w.chain?.length > 1 ? `<p class="trail-main small">Chemin de l'argent : ${chainText(w.chain)} → ce wallet</p>` : ""}
               ${
                 w.funders.length
                   ? `<ul class="trail-list">${w.funders.map(funderLine).join("")}</ul>`
@@ -378,6 +407,7 @@ function alertCard(ctx, a) {
           <span class="muted">· ${timeAgo(a.ts * 1000)}</span>
         </p>
         <p class="alert-move">${moveLine(a, now)}${reviewLine(ctx.state, a)}</p>
+        ${founderLine(ctx.state, a)}
         ${marketLine(a)}
         <div class="reasons">${a.reasons.map((r) => `<span>${esc(r)}</span>`).join("")}</div>
         <footer>

@@ -2478,3 +2478,8 @@ label.check {
     grid-template-columns: 1fr;
   }
 }
+
+.alert-founder {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}

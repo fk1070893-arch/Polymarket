@@ -21,10 +21,12 @@ import { getJSON, loadState, mapLimit, readData, writeState } from "./lib.mjs";
 
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
-const MAX_WALLETS = 15; // wallets examinés par passage
-const BUDGET = 150000; // temps maximum de lecture de la blockchain (ms)
-const RECHECK = DAY; // un wallet est réexaminé au plus une fois par jour
+const MAX_WALLETS = 12; // nouveaux wallets examinés par passage
+const BUDGET = 90000; // temps maximum de lecture de la blockchain (ms)
+const RETRY = HOUR; // nouvel essai après une lecture en échec
 const FUNDER_TTL = 7 * DAY;
+const MAX_HOPS = 3; // étages remontés au plus derrière un wallet intermédiaire
+const FRESH_TXS = 50; // un wallet qui a envoyé si peu de transactions est un simple relais
 const DATA_API = "https://data-api.polymarket.com";
 const GAMMA = "https://gamma-api.polymarket.com";
 const BLOCKSCOUT = "https://polygon.blockscout.com";
@@ -105,11 +107,11 @@ async function blockAt(ts) {
   return guess;
 }
 
-// Dépôts de dollars reçus autour du premier pari du wallet (2 jours avant,
-// 3 heures après), lus bloc par bloc dans les journaux de la blockchain
-async function rpcTransfers(address, firstMs) {
-  const from = await blockAt(Math.floor(firstMs / 1000) - 2 * 86400);
-  const to = Math.min((await latestBlock()).number, await blockAt(Math.floor(firstMs / 1000) + 3 * 3600));
+// Dollars reçus par une adresse entre deux instants (ms), lus bloc par bloc
+// dans les journaux de la blockchain
+async function rpcTransfers(address, fromMs, toMs) {
+  const from = await blockAt(Math.floor(fromMs / 1000));
+  const to = Math.min((await latestBlock()).number, await blockAt(Math.floor(toMs / 1000)));
   const h = await latestBlock();
   const topic = `0x${"0".repeat(24)}${address.slice(2)}`;
   const out = [];
@@ -144,8 +146,8 @@ async function rpcTransfers(address, firstMs) {
 }
 
 // Premiers transferts de dollars reçus par une adresse (du plus ancien au plus récent)
-async function tokenTransfers(address, firstMs) {
-  if (!ETHERSCAN_KEY) return rpcTransfers(address, firstMs);
+async function tokenTransfers(address, fromMs, toMs) {
+  if (!ETHERSCAN_KEY) return rpcTransfers(address, fromMs, toMs);
   const qs = `module=account&action=tokentx&address=${address}&sort=asc&page=1&offset=200`;
   // Le message d'erreur contient l'adresse appelée : jamais la clé (publiée sinon)
   const data = await getJSON(`https://api.etherscan.io/v2/api?chainid=137&${qs}&apikey=${ETHERSCAN_KEY}`, 2).catch((err) => {
@@ -199,26 +201,94 @@ function kindOf(info, pm) {
   if (pm) return "polymarket";
   if (info.label || (info.txs != null && info.txs > 5000)) return "plateforme";
   if (info.contract) return "contrat";
+  // Un wallet neuf qui n'a presque rien fait d'autre : simple relais, on remonte
+  if (info.txs != null && info.txs <= FRESH_TXS) return "relais";
   return "wallet";
 }
 
+// ---------- Remonter l'argent ----------
+
+let funders = {}; // adresse -> { at, label, kind, txs, pm, contract }
+
+async function describe(address) {
+  if (!funders[address]) {
+    const [info, pm] = await Promise.all([addressInfo(address), polymarketProfile(address)]);
+    funders[address] = { at: now, ...info, pm, kind: kindOf(info, pm) };
+  }
+  return funders[address];
+}
+
+// Qui a envoyé des dollars à `address` entre deux instants : jusqu'à 5
+// expéditeurs, des plus anciens aux plus récents
+async function fundersOf(address, fromMs, toMs) {
+  const txs = await tokenTransfers(address, fromMs, toMs);
+  const incoming = new Map();
+  for (const t of txs) {
+    const ts = Number(t.timeStamp) * 1000;
+    if (lc(t.to) !== address || !USDC.has(lc(t.contractAddress)) || ts > toMs + 600000) continue;
+    const from = lc(t.from);
+    if (from === address || POLYMARKET_CONTRACTS.has(from) || /^0x0+$/.test(from)) continue;
+    const amount = (num(t.value) ?? 0) / 10 ** (num(t.tokenDecimal) ?? 6);
+    if (!incoming.has(from)) incoming.set(from, { address: from, amount: 0, count: 0, first: ts, tx: t.hash });
+    const f = incoming.get(from);
+    f.amount += amount;
+    f.count++;
+  }
+  return [...incoming.values()]
+    .sort((a, b) => a.first - b.first)
+    .slice(0, 5)
+    .map((f) => ({ ...f, amount: Math.round(f.amount) }));
+}
+
+// Le founder : celui qui a envoyé le plus (hors plateformes si possible)
+function pickFounder(list) {
+  const own = list.filter((f) => funders[f.address]?.kind !== "plateforme");
+  return [...(own.length ? own : list)].sort((a, b) => b.amount - a.amount)[0] ?? null;
+}
+
+// Chaîne founder → … → origine : tant que le founder est un simple relais
+// (wallet neuf), on regarde qui l'a financé juste avant qu'il envoie l'argent
+async function traceWallet(wallet, firstTrade) {
+  const direct = await fundersOf(wallet, firstTrade - 2 * DAY, firstTrade + 3 * HOUR);
+  for (const f of direct) await describe(f.address);
+  const chain = [];
+  let cur = pickFounder(direct);
+  const seen = new Set([wallet]);
+  while (cur && !seen.has(cur.address)) {
+    seen.add(cur.address);
+    chain.push(cur);
+    if (chain.length > MAX_HOPS || funders[cur.address]?.kind !== "relais") break;
+    const up = await fundersOf(cur.address, cur.first - 3 * DAY, cur.first);
+    for (const f of up) await describe(f.address);
+    cur = pickFounder(up);
+  }
+  return { direct, chain };
+}
+
 // ---------- Programme principal ----------
+
+const summary = (f) => {
+  if (!f) return null;
+  const info = funders[f.address] ?? {};
+  return { address: f.address, amount: f.amount, first: f.first, kind: info.kind ?? "wallet", label: info.label ?? null, txs: info.txs ?? null, pm: info.pm ?? null };
+};
 
 async function main(prev) {
   const alerts = (await readData("alerts.json").catch(() => null))?.alerts ?? [];
   const review = await readData("alerts-review.json").catch(() => null);
   const status = new Map((review?.rows ?? []).map((r) => [r.id, r]));
 
-  // Wallets récents (âge en secondes) dont les alertes ont gagné, d'après
-  // le gain réel sur les marchés terminés
+  // Tous les wallets récents (âge en secondes) des alertes, avec le résultat
+  // de leurs alertes sur les marchés terminés
   const byWallet = new Map();
   for (const a of alerts) {
     if (!a.wallet || a.walletAge == null || a.walletAge > 30 * 86400) continue;
     const w = lc(a.wallet);
-    if (!byWallet.has(w)) byWallet.set(w, { wallet: w, name: a.name || "", age: a.walletAge, firstTrade: Infinity, alerts: 0, won: 0, lost: 0, pnl: 0, cash: 0, best: 0 });
+    if (!byWallet.has(w)) byWallet.set(w, { wallet: w, name: a.name || "", age: a.walletAge, firstTrade: Infinity, last: 0, alerts: 0, won: 0, lost: 0, pnl: 0, cash: 0, best: 0 });
     const x = byWallet.get(w);
     // Premier pari connu du wallet : ses dépôts sont juste avant
     x.firstTrade = Math.min(x.firstTrade, (a.ts - a.walletAge) * 1000);
+    x.last = Math.max(x.last, a.ts);
     x.alerts++;
     x.cash += a.cash ?? 0;
     x.best = Math.max(x.best, a.score ?? 0);
@@ -227,99 +297,98 @@ async function main(prev) {
     if (r?.status === "lost") x.lost++;
     if (r && (r.status === "won" || r.status === "lost")) x.pnl += r.roi;
   }
-  const winners = [...byWallet.values()].filter((x) => x.won > 0 && x.pnl > 0).sort((a, b) => b.pnl - a.pnl);
+  const all = [...byWallet.values()];
+  const isWinner = (x) => x.won > 0 && x.pnl > 0;
 
-  const traced = prev.traced ?? {}; // wallet -> { at, funders, error }
-  const funders = prev.funders ?? {}; // adresse -> { at, label, kind, txs, pm }
+  const traced = prev.traced ?? {}; // wallet -> { at, direct, chain, error }
+  funders = prev.funders ?? {};
   for (const [k, v] of Object.entries(funders)) if (now - v.at > FUNDER_TTL) delete funders[k];
 
-  const todo = winners.filter((x) => !traced[x.wallet] || now - traced[x.wallet].at > RECHECK).slice(0, MAX_WALLETS);
+  // Chaque wallet n'est lu qu'une fois (son financement ne change pas) ;
+  // les gagnants d'abord, puis les alertes les plus fortes et les plus récentes
+  const todo = all
+    .filter((x) => !traced[x.wallet] || (traced[x.wallet].error && now - traced[x.wallet].at > RETRY) || !traced[x.wallet].chain)
+    .sort((a, b) => Number(isWinner(b)) - Number(isWinner(a)) || b.best - a.best || b.last - a.last)
+    .slice(0, MAX_WALLETS);
   let failures = 0;
+  let done = 0;
   let lastError = "";
   const deadline = Date.now() + BUDGET;
   await mapLimit(todo, 3, async (x) => {
     // Plus le temps : ce wallet sera lu au prochain passage
     if (Date.now() > deadline) return;
     try {
-      const txs = await tokenTransfers(x.wallet, x.firstTrade);
-      const incoming = new Map();
-      for (const t of txs) {
-        if (lc(t.to) !== x.wallet || !USDC.has(lc(t.contractAddress))) continue;
-        const from = lc(t.from);
-        if (from === x.wallet || POLYMARKET_CONTRACTS.has(from) || /^0x0+$/.test(from)) continue;
-        const amount = (num(t.value) ?? 0) / 10 ** (num(t.tokenDecimal) ?? 6);
-        if (!incoming.has(from)) incoming.set(from, { address: from, amount: 0, count: 0, first: Number(t.timeStamp) * 1000, tx: t.hash });
-        const f = incoming.get(from);
-        f.amount += amount;
-        f.count++;
-      }
-      // Les premiers dépôts d'abord : c'est là que se trouve la source
-      const list = [...incoming.values()].sort((a, b) => a.first - b.first).slice(0, 5);
-      for (const f of list) {
-        if (!funders[f.address]) {
-          const [info, pm] = await Promise.all([addressInfo(f.address), polymarketProfile(f.address)]);
-          funders[f.address] = { at: now, ...info, pm, kind: kindOf(info, pm) };
-        }
-      }
-      traced[x.wallet] = { at: now, funders: list.map((f) => ({ ...f, amount: Math.round(f.amount) })) };
+      const { direct, chain } = await traceWallet(x.wallet, x.firstTrade);
+      traced[x.wallet] = { at: now, direct, chain };
+      done++;
     } catch (err) {
       failures++;
       lastError = err.message;
-      // Nouvel essai dans une heure
-      traced[x.wallet] = { at: now - RECHECK + HOUR, funders: traced[x.wallet]?.funders ?? [], error: err.message };
+      traced[x.wallet] = { ...traced[x.wallet], at: now, error: err.message };
     }
   });
+  // On oublie les wallets qui ne sont plus dans les alertes
+  for (const w of Object.keys(traced)) if (!byWallet.has(w)) delete traced[w];
 
-  // Adresses (hors plateformes) qui ont financé plusieurs wallets suspects
-  const fundedBy = new Map();
+  // Adresses (hors plateformes) qu'on retrouve derrière plusieurs wallets suspects
+  const behind = new Map();
   for (const [wallet, t] of Object.entries(traced)) {
-    for (const f of t.funders ?? []) {
+    for (const f of [...(t.direct ?? []), ...(t.chain ?? [])]) {
       if (funders[f.address]?.kind === "plateforme") continue;
-      if (!fundedBy.has(f.address)) fundedBy.set(f.address, new Set());
-      fundedBy.get(f.address).add(wallet);
+      if (!behind.has(f.address)) behind.set(f.address, new Set());
+      behind.get(f.address).add(wallet);
     }
   }
-  const clusters = [...fundedBy.entries()]
+  const shared = (a) => behind.get(a)?.size ?? 1;
+  const clusters = [...behind.entries()]
     .filter(([, ws]) => ws.size >= 2)
-    .map(([address, ws]) => ({ address, label: funders[address]?.label ?? null, kind: funders[address]?.kind ?? "wallet", pm: funders[address]?.pm ?? null, wallets: [...ws] }))
+    .map(([address, ws]) => ({ ...summary({ address }), wallets: [...ws] }))
     .sort((a, b) => b.wallets.length - a.wallets.length);
+
+  const entry = (x) => {
+    const t = traced[x.wallet] ?? {};
+    const chain = (t.chain ?? []).map((f) => ({ ...summary(f), shared: shared(f.address) }));
+    const origin = chain[chain.length - 1] ?? null;
+    const main = [...chain].reverse().find((f) => f.kind === "polymarket" && f.pm?.proxy && f.pm.proxy !== x.wallet);
+    return { founder: chain[0] ?? null, origin, hops: chain.length, main: main ? { funder: main.address, ...main.pm } : null, error: t.error ?? null };
+  };
 
   const view = {
     updatedAt: new Date(now).toISOString(),
     source: ETHERSCAN_KEY ? "Etherscan" : "serveurs publics Polygon",
-    candidates: winners.length,
-    wallets: winners
-      .filter((x) => traced[x.wallet])
+    candidates: all.filter(isWinner).length,
+    // Pour la fiche de chaque alerte : founder et origine de l'argent
+    byWallet: Object.fromEntries(all.filter((x) => traced[x.wallet]).map((x) => [x.wallet, entry(x)])),
+    // Détail des wallets récents gagnants
+    wallets: all
+      .filter((x) => isWinner(x) && traced[x.wallet])
+      .sort((a, b) => b.pnl - a.pnl)
       .slice(0, 60)
-      .map(({ firstTrade, ...x }) => {
+      .map(({ firstTrade, last, ...x }) => {
         const t = traced[x.wallet];
-        const fs = (t.funders ?? []).map((f) => {
-          const info = funders[f.address] ?? {};
-          return { ...f, label: info.label ?? null, kind: info.kind ?? "wallet", txs: info.txs ?? null, pm: info.pm ?? null, shared: fundedBy.get(f.address)?.size ?? 1 };
-        });
-        const main = fs.find((f) => f.kind === "polymarket" && f.pm?.proxy && f.pm.proxy !== x.wallet);
-        return { ...x, error: t.error ?? null, funders: fs, main: main ? { funder: main.address, ...main.pm } : null };
+        return {
+          ...x,
+          ...entry(x),
+          chain: (t.chain ?? []).map((f) => ({ ...summary(f), shared: shared(f.address) })),
+          funders: (t.direct ?? []).map((f) => ({ ...summary(f), count: f.count, shared: shared(f.address) })),
+        };
       }),
     clusters,
   };
-  const mains = view.wallets.filter((w) => w.main).length;
+  const withOrigin = Object.values(view.byWallet).filter((e) => e.origin);
+  const relays = Object.values(view.byWallet).filter((e) => e.hops > 1).length;
+  const mains = Object.values(view.byWallet).filter((e) => e.main).length;
   console.log(
-    `Pistes : ${winners.length} wallets récents gagnants, ${todo.length} examinés (${failures} en échec via ${view.source}), ${mains} compte principal probable, ${clusters.length} adresse(s) qui financent plusieurs suspects`
+    `Pistes : ${all.length} wallets récents dans les alertes, ${done} lus ce passage (${failures} en échec via ${view.source}), ${withOrigin.length} founders trouvés, ${relays} passés par un relais, ${mains} compte principal probable, ${clusters.length} adresse(s) derrière plusieurs suspects`
   );
-  if (failures && failures === todo.length) console.log(`::warning::Explorateur Polygon injoignable : ${lastError}`);
-  // Si tout a échoué, on réessaie au passage suivant sans attendre l'heure
-  return { state: { traced, funders, at: failures && failures === todo.length ? 0 : now }, view };
+  if (failures && !done) console.log(`::warning::Blockchain Polygon illisible : ${lastError}`);
+  return { state: { traced, funders, at: now }, view };
 }
 
 const prev = (await loadState("wallets")) ?? {};
-if (prev.at && now - prev.at < HOUR - 5 * 60000 && !process.env.WALLETS_FORCE) {
-  console.log("Pistes récentes : republiées telles quelles");
-  if (prev.view) await writeState("wallets", prev, prev.view);
-} else {
-  try {
-    const { state, view } = await main(prev);
-    await writeState("wallets", { ...state, view }, view);
-  } catch (err) {
-    console.log(`::warning::Pistes des wallets en échec : ${err.message}`);
-  }
+try {
+  const { state, view } = await main(prev);
+  await writeState("wallets", state, view);
+} catch (err) {
+  console.log(`::warning::Pistes des wallets en échec : ${err.message}`);
 }
