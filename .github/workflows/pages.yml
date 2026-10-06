@@ -12,17 +12,16 @@ on:
         default: false
 
 permissions:
-  contents: read
+  contents: write # pour enregistrer la mémoire des tests dans la branche « etat »
   pages: write
   id-token: write
 
-# Une seule publication automatique à la fois ; les suivantes attendent
-# leur tour (sinon, avec une exécution toutes les 15 min, aucune n'irait au
-# bout). Les lancements manuels ont leur propre file : GitHub ne garde
-# qu'une exécution en attente par file, et un passage automatique
-# remplacerait sinon un recalcul demandé à la main.
+# Un seul passage à la fois, manuel ou automatique : deux passages
+# simultanés reliraient la même mémoire et le second effacerait les paris
+# enregistrés par le premier. Les suivants attendent leur tour (GitHub n'en
+# garde qu'un en attente).
 concurrency:
-  group: pages-${{ github.event_name == 'workflow_dispatch' && 'manuel' || 'auto' }}
+  group: pages
   cancel-in-progress: false
 
 jobs:
@@ -43,11 +42,40 @@ jobs:
       - id: pages
         uses: actions/configure-pages@v5
 
+      # Mémoire des tests en direct (paris pris, caches…), gardée dans la
+      # branche « etat », indépendante du site publié
+      - name: Récupérer la mémoire des tests
+        run: |
+          mkdir -p .state
+          # Si la branche existe mais ne se lit pas (panne réseau), on arrête :
+          # repartir de zéro écraserait la mémoire au moment de l'enregistrer
+          set +e
+          git ls-remote --exit-code --heads origin etat >/dev/null
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ]; then
+            git fetch -q --depth 1 origin etat
+            git archive FETCH_HEAD | tar -x -C .state
+            echo "Mémoire récupérée : $(ls .state | wc -l) fichiers"
+          elif [ "$code" -eq 2 ]; then
+            echo "Pas encore de mémoire : reprise depuis le site publié"
+          else
+            echo "::error::Branche « etat » illisible (code $code) : passage arrêté pour ne pas perdre la mémoire"
+            exit 1
+          fi
+
       # PAGES_URL permet aux scripts de relire l'état de la publication précédente
       - name: Récupérer les marchés Polymarket
         run: node scripts/build-snapshot.mjs
         env:
           PAGES_URL: ${{ steps.pages.outputs.base_url }}
+
+      # Tous les événements ouverts, lus une seule fois et partagés par les
+      # étapes suivantes (si elle échoue, chacune relit l'API elle-même)
+      - name: Lire tous les événements Polymarket
+        run: node scripts/build-universe.mjs
+        continue-on-error: true
+        timeout-minutes: 5
 
       - name: Détecter les paris suspects
         run: node scripts/build-alerts.mjs
@@ -116,15 +144,33 @@ jobs:
           PAGES_URL: ${{ steps.pages.outputs.base_url }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Facultatif : variable (pas secret) listant les alertes voulues
+          TELEGRAM_TYPES: ${{ vars.TELEGRAM_TYPES }}
 
-      # Recalculé au plus une fois par jour (ou à la demande), sinon republié tel quel
+      # Recalculé une fois par semaine (ou à la demande), sinon republié tel quel
       - name: Backtest sur les marchés terminés
         run: node scripts/build-backtest.mjs
         continue-on-error: true
-        timeout-minutes: 15
+        timeout-minutes: 19
         env:
           PAGES_URL: ${{ steps.pages.outputs.base_url }}
           BACKTEST_FORCE: ${{ inputs.backtest }}
+
+      # Enregistrée même si une étape ou la publication échoue
+      - name: Enregistrer la mémoire des tests
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd .state
+          [ -n "$(ls -A)" ] || { echo "Rien à enregistrer"; exit 0; }
+          # Un seul commit, remplacé à chaque passage : la branche reste légère
+          rm -rf .git
+          git init -q -b etat
+          git add -A
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -q -m "Mémoire des tests en direct"
+          git push -q -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" etat
+          echo "Mémoire enregistrée : $(ls | wc -l) fichiers, $(du -sh . | cut -f1)"
 
       # Chaque publication donne un nouveau nom de version aux fichiers du site,
       # pour que les navigateurs ne gardent pas l'ancien code en mémoire

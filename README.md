@@ -35,7 +35,7 @@ Le site fige aussi, pour chaque marché, les deux probabilités 24 h avant l'éc
 
 ### Backtest
 
-L'onglet **Backtest** rejoue le passé, une fois par jour (ou à la demande : *Actions → Publier le site → Run workflow → Recalculer le backtest*) :
+L'onglet **Backtest** rejoue le passé, une fois par semaine sur un large échantillon (ou à la demande : *Actions → Publier le site → Run workflow → Recalculer le backtest*) :
 
 1. **Calibration de Polymarket** sur ~2 800 marchés terminés des 6 derniers mois, tirés à parts égales dans quatre tranches de volume (< 10 k$, 10-100 k$, 100 k$-1 M$, > 1 M$) pour ne pas ignorer les petits marchés : pour chaque tranche de prix la veille de la fin (5-10 %, 10-20 %…), la fréquence réelle de l'issue et le gain qu'aurait donné l'achat systématique de « Oui » ou de « Non », par catégorie et par taille de marché.
 2. **Modèle crypto rejoué** sur les marchés BTC/ETH terminés des 4 derniers mois, avec le prix Deribit et l'indice de volatilité DVOL de l'époque, avec un détail par taille de marché.
@@ -71,6 +71,8 @@ En haut de l'onglet, un **tableau de bord** résume chaque stratégie : statut (
 
 Le jeton et l'identifiant restent privés : ils n'apparaissent ni dans le code, ni dans les logs, ni sur le site.
 
+Chaque soir à 20 h (heure de Paris), un **bilan** résume la journée de chaque stratégie (paris réglés, gain du jour, total, statut), et un message part quand une stratégie atteint 50 paris réglés (premier verdict). Pour choisir les alertes reçues : *Settings → Secrets and variables → Actions → onglet Variables → New repository variable*, nom `TELEGRAM_TYPES`, valeur parmi `favoris, bookmakers, kalshi, suspects, neufs, anomalies, bilan` séparés par des virgules (sans cette variable, tout est envoyé).
+
 ### Études de niche (onglet Backtest)
 
 - **Sport, moment du pari** : le biais sur les favoris rejoué 24 h, 6 h et 2 h avant la fin.
@@ -101,7 +103,7 @@ La GitHub Action génère six fichiers à chaque passage :
 - `data/markets.json` : dernier prix et résultat final des marchés déjà vus (pour régler le portefeuille) ;
 - `data/alerts.json` : paris suspects des 7 derniers jours ;
 - `data/crypto.json` : modèle crypto et historique de ses prédictions ;
-- `data/backtest.json` : résultats du backtest (recalculés une fois par jour) ;
+- `data/backtest.json` : résultats du backtest (recalculés une fois par semaine) ;
 - `data/strategy.json` : paris fictifs du test en direct de la stratégie.
 
 Comme une Action n'a pas de mémoire, chaque passage relit l'état précédent depuis le site publié.
@@ -117,6 +119,12 @@ Si ta connexion bloque les domaines Polymarket, le site affiche automatiquement 
 Le site est ensuite disponible sur `https://<ton-pseudo>.github.io/Polymarket/` et se met à jour tout seul toutes les 5 minutes (GitHub peut retarder un passage de quelques minutes).
 
 > GitHub Pages est gratuit pour les dépôts **publics**. Pour un dépôt privé, il faut un compte GitHub Pro.
+
+## Fiabilité
+
+- **Un seul passage à la fois** (manuel ou automatique) : deux passages simultanés reliraient la même mémoire et le second effacerait les paris du premier.
+- **Mémoire des tests dans la branche `etat`** du dépôt : récupérée au début de chaque passage, renvoyée à la fin même si une étape ou la publication échoue. Elle ne contient que l'état le plus récent (un seul commit remplacé à chaque fois, pour que le dépôt ne grossisse pas). Si la branche existe mais ne se lit pas, le passage s'arrête au lieu de repartir de zéro.
+- **Une seule lecture de Polymarket par passage** (`scripts/build-universe.mjs`, environ 20 000 événements) partagée par les étapes suivantes ; si elle échoue, chaque étape relit l'API elle-même.
 
 ## En local
 

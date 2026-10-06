@@ -6,6 +6,28 @@ import { fileURLToPath } from "node:url";
 
 export const DATA_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "site", "data");
 
+// Mémoire des tests d'un passage à l'autre : la GitHub Action la récupère au
+// début depuis la branche « etat » du dépôt dans .state/, et l'y renvoie à
+// la fin, que la publication du site réussisse ou non. Elle ne dépend donc
+// plus du site publié (qui sert seulement de repli, pour la transition).
+export const STATE_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", ".state");
+
+// Fichiers publiés qui servent aussi de mémoire au passage suivant
+const PERSISTED = new Set(["alerts.json", "arbs.json", "backtest.json", "crypto.json", "markets.json", "odds.json", "notify-state.json"]);
+
+async function readStateFile(name) {
+  try {
+    return JSON.parse(await readFile(join(STATE_DIR, name), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+async function writeStateFile(name, data) {
+  await mkdir(STATE_DIR, { recursive: true });
+  await writeFile(join(STATE_DIR, name), JSON.stringify(data));
+}
+
 export async function getJSON(url, tries = 3) {
   for (let i = 1; ; i++) {
     try {
@@ -37,6 +59,8 @@ export async function mapLimit(items, limit, fn) {
 // Les Actions n'ont pas de mémoire d'une exécution à l'autre : on relit
 // donc l'état précédent depuis le site déjà publié sur GitHub Pages.
 export async function loadPrevious(name) {
+  const saved = await readStateFile(name);
+  if (saved) return saved;
   const base = process.env.PAGES_URL;
   if (!base) return null;
   try {
@@ -56,6 +80,7 @@ export async function writeData(name, data) {
   await mkdir(DATA_DIR, { recursive: true });
   const path = join(DATA_DIR, name);
   await writeFile(path, JSON.stringify(data));
+  if (PERSISTED.has(name)) await writeStateFile(name, data);
   console.log(`Écrit : ${path}`);
 }
 
@@ -69,8 +94,14 @@ export async function loadState(name) {
 }
 
 export async function writeState(name, state, view) {
-  await writeData(`${name}-state.json`, state);
+  // L'état complet reste dans la mémoire (non publié) ; le site n'a que le résumé
+  await writeStateFile(`${name}-state.json`, state);
   await writeData(`${name}.json`, view);
+}
+
+// État complet écrit plus tôt dans ce même passage (alertes Telegram…)
+export async function readState(name) {
+  return readStateFile(`${name}-state.json`);
 }
 
 // Tous les événements Gamma dont la fin prévue tombe entre `from` et `to`
@@ -135,4 +166,14 @@ export async function readCache(name) {
   } catch {
     return null;
   }
+}
+
+// Événements lus une seule fois en début de passage (build-universe.mjs),
+// filtrés par `keep`. null si la lecture n'a pas eu lieu : l'appelant relit
+// alors l'API lui-même.
+let universe;
+export async function universeEvents(keep = () => true) {
+  universe ??= (await readCache("universe.json")) ?? false;
+  if (!universe?.events) return null;
+  return universe.events.filter(keep);
 }

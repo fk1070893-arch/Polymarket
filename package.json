@@ -15,6 +15,7 @@
     "odds": "node scripts/build-odds.mjs",
     "notify": "node scripts/build-notify.mjs",
     "cross": "node scripts/build-cross.mjs",
+    "universe": "node scripts/build-universe.mjs",
     "test": "node --test scripts/*.test.mjs",
     "start": "npx --yes serve site"
   }

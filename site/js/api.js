@@ -140,7 +140,7 @@ export async function loadCrypto() {
   return fetchJSON(`data/crypto.json?t=${Date.now()}`, 15000);
 }
 
-// Backtest sur les marchés terminés, recalculé une fois par jour.
+// Backtest sur les marchés terminés, recalculé une fois par semaine.
 export async function loadBacktest() {
   return fetchJSON(`data/backtest.json?t=${Date.now()}`, 15000);
 }

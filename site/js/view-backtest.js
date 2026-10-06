@@ -399,7 +399,7 @@ export function renderBacktest(ctx) {
   if (!data || !data.calibration) {
     body.innerHTML =
       live +
-      `<p class="empty">Le backtest n'est pas encore disponible. Il est calculé une fois par jour par la GitHub Action (quelques minutes de calcul) : réessaie un peu plus tard.</p>`;
+      `<p class="empty">Le backtest n'est pas encore disponible. Il est calculé une fois par semaine par la GitHub Action (une quinzaine de minutes de calcul) : réessaie un peu plus tard.</p>`;
     return;
   }
 

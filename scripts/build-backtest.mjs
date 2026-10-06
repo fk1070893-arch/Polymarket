@@ -30,12 +30,13 @@ const HOUR = 3600000;
 const LOOKBACK = 24 * HOUR; // on se place 24 h avant la fin
 const MONTHS = 6; // profondeur de l'étude de calibration
 const CRYPTO_MONTHS = 4;
-const MAX_PER_BUCKET = 700; // marchés par tranche de volume (calibration)
+const MAX_PER_BUCKET = 1500; // marchés par tranche de volume (calibration)
 const MAX_CRYPTO_PER_BUCKET = 700;
 const MIN_VOLUME = 1000; // en dessous, le prix ne veut plus dire grand-chose
-const REFRESH_EVERY = 24 * HOUR;
-const TIME_BUDGET = 13 * 60 * 1000; // on s'arrête proprement au bout de 13 min
-const MAX_NICHE_PER_BUCKET = 150; // études de niche : marchés par tranche de volume
+// Une fois par semaine, sur un échantillon plus large (marges d'erreur plus serrées)
+const REFRESH_EVERY = 7 * 24 * HOUR;
+const TIME_BUDGET = 16 * 60 * 1000; // on s'arrête proprement au bout de 16 min
+const MAX_NICHE_PER_BUCKET = 300; // études de niche : marchés par tranche de volume
 
 const started = Date.now();
 const outOfTime = () => Date.now() - started > TIME_BUDGET;

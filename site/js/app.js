@@ -742,7 +742,7 @@ function restoreTheme() {
 
 // ---------- Chargement ----------
 
-// Le backtest ne change qu'une fois par jour : on ne le recharge pas à chaque fois
+// Le backtest ne change qu'une fois par semaine : on ne le recharge pas à chaque fois
 let backtestLoadedAt = 0;
 async function refreshBacktest() {
   if (Date.now() - backtestLoadedAt < 30 * 60 * 1000 && state.backtest) return;

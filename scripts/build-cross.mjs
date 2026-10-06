@@ -99,6 +99,8 @@ async function kalshiMarkets() {
         mid: (yesBid + yesAsk) / 2,
         end: parseTime(m.close_time) ?? parseTime(m.expiration_time),
         volume: num(m.volume) ?? 0,
+        // Règles de résolution, pour vérifier à la main qu'il s'agit bien de la même question
+        rules: String(m.rules_primary ?? "").slice(0, 500),
       });
     }
     cursor = data?.cursor ?? "";
@@ -207,7 +209,7 @@ async function main(prev) {
   const pairs = [];
   const arbs = [];
   for (const k of kalshi) {
-    const hit = bestMatch(index, k.text, { min: MIN_SIM, accept: near(k.end, 3) });
+    const hit = bestMatch(index, k.text, { min: MIN_SIM, accept: near(k.end, 2) });
     if (!hit) continue;
     const m = hit.item;
     // Seulement les questions oui / non : « Oui » a alors le même sens des deux côtés
@@ -224,7 +226,8 @@ async function main(prev) {
       slug: m.slug,
       question: m.q,
       outcomes: m.outcomes,
-      kalshi: { ticker: k.ticker, text: k.text, mid: k.mid, yesBid: k.yesBid, yesAsk: k.yesAsk },
+      kalshi: { ticker: k.ticker, text: k.text, mid: k.mid, yesBid: k.yesBid, yesAsk: k.yesAsk, end: k.end, rules: k.rules },
+      pmEnd: m.end ?? null,
       sim: Math.round(hit.sim * 100) / 100,
       pmMid: m.p,
       gap: m.p - k.mid,
@@ -243,7 +246,7 @@ async function main(prev) {
       if (c.pmCost == null || c.kCost == null) continue;
       const cost = c.pmCost + c.kCost + kalshiFee(c.kCost);
       if (cost < 0.99 && hit.sim >= MIN_SIM_BET)
-        arbs.push({ marketId: m.id, question: m.q, kalshiText: k.text, ticker: k.ticker, slug: m.slug, label: c.label, cost: Math.round(cost * 1000) / 1000, profit: Math.round((1 - cost) * 1000) / 1000, sim: hit.sim, end: m.end });
+        arbs.push({ marketId: m.id, question: m.q, kalshiText: k.text, kalshiRules: k.rules, kalshiEnd: k.end, ticker: k.ticker, slug: m.slug, label: c.label, cost: Math.round(cost * 1000) / 1000, profit: Math.round((1 - cost) * 1000) / 1000, sim: hit.sim, end: m.end });
     }
   }
   console.log(`Kalshi : ${pairs.length} questions rapprochées de Polymarket, ${arbs.length} anomalies entre sites`);
@@ -313,7 +316,7 @@ async function main(prev) {
     updatedAt: new Date(now).toISOString(),
     startedAt: prev.startedAt ?? new Date(now).toISOString(),
     rule: {
-      description: `Questions rapprochées entre Polymarket et Kalshi (similarité d'au moins ${MIN_SIM_BET * 100} %, dates à 3 jours près) : si Polymarket vend une issue au moins ${MIN_GAP * 100} pts moins cher que la probabilité Kalshi, 1 $ fictif sur cette issue au prix vendeur. Un pari par marché.`,
+      description: `Questions rapprochées entre Polymarket et Kalshi (similarité d'au moins ${MIN_SIM_BET * 100} %, dates de fin à 2 jours près) : si Polymarket vend une issue au moins ${MIN_GAP * 100} pts moins cher que la probabilité Kalshi, 1 $ fictif sur cette issue au prix vendeur. Un pari par marché.`,
     },
     kalshiStatus,
     metaculusStatus: meta.status,

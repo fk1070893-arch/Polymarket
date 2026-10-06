@@ -311,6 +311,13 @@ function arbsSection(st) {
 // ---------- Kalshi et Metaculus ----------
 
 const yesNo = (o) => (o === "Yes" ? "Oui" : o === "No" ? "Non" : o);
+const dayFmt = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "short", year: "numeric" });
+const day = (t) => (t ? dayFmt.format(new Date(t)) : "?");
+
+// Règles Kalshi dépliables, pour vérifier que les deux questions se règlent pareil
+function kalshiRules(rules) {
+  return rules ? `<details class="rules"><summary>Règles Kalshi</summary><p>${esc(rules)}${rules.length >= 500 ? "…" : ""}</p></details>` : "";
+}
 
 function crossSection(st) {
   const title = "Les mêmes questions sur Kalshi et Metaculus";
@@ -340,7 +347,7 @@ function crossSection(st) {
                 .slice(0, 10)
                 .map(
                   (a) => `<tr><td><a href="https://polymarket.com/event/${esc(a.slug)}" target="_blank" rel="noopener noreferrer">${esc(a.question)}</a>
-                    <span class="muted small"> · Kalshi : ${esc(a.kalshiText)}</span></td>
+                    <span class="muted small"> · Kalshi : ${esc(a.kalshiText)}${a.end ? ` · fin ${day(a.end)}` : ""}${a.kalshiEnd ? ` / Kalshi ${day(a.kalshiEnd)}` : ""}</span>${kalshiRules(a.kalshiRules)}</td>
                     <td>${esc(a.label)}</td><td class="num">${cents(a.cost)}</td><td class="num up">+${cents(a.profit)}</td></tr>`
                 )
                 .join("")}</tbody>
@@ -354,7 +361,7 @@ function crossSection(st) {
               <thead><tr><th>Question (Polymarket / Kalshi)</th><th class="num">Polymarket</th><th class="num">Kalshi</th><th class="num">Écart</th></tr></thead>
               <tbody>${pairs
                 .map(
-                  (p) => `<tr><td>${esc(p.question)}<span class="muted small"><br />Kalshi : ${esc(p.kalshi.text)} · ressemblance ${Math.round(p.sim * 100)} %</span></td>
+                  (p) => `<tr><td>${esc(p.question)}<span class="muted small"><br />Kalshi : ${esc(p.kalshi.text)} · ressemblance ${Math.round(p.sim * 100)} % · fin ${day(p.pmEnd)} / Kalshi ${day(p.kalshi.end)}</span>${kalshiRules(p.kalshi.rules)}</td>
                     <td class="num">${pct(p.pmMid)}</td><td class="num">${pct(p.kalshi.mid)}</td>
                     <td class="num">${Math.abs(p.gap) >= 0.05 ? `<b>${gap(p.gap)}</b>` : gap(p.gap)}</td></tr>`
                 )

@@ -13,7 +13,7 @@
 import { GAMMA } from "../site/js/api.js";
 import { normalizeMarket } from "../site/js/normalize.js";
 import { parseTime } from "./backtest-lib.mjs";
-import { getJSON, loadState, writeState } from "./lib.mjs";
+import { getJSON, loadState, universeEvents, writeState } from "./lib.mjs";
 import { askPrices, paperStats, pnlCurve, settleBets, spreadOf } from "./paper.mjs";
 
 const HOUR = 3600000;
@@ -55,6 +55,15 @@ const QUERIES = [
 ];
 
 async function youngMarkets(now) {
+  // Lecture partagée du début du passage : les événements créés il y a moins de 8 h
+  const shared = await universeEvents((ev) => {
+    const created = parseTime(ev.createdAt) ?? parseTime(ev.startDate);
+    return created != null && now - created <= AGE[1] + HOUR;
+  });
+  if (shared) {
+    console.log(`  ${shared.length} événements récents (lecture partagée du début du passage)`);
+    return shared.flatMap((ev) => (ev.markets ?? []).map((m) => ({ ...m, events: [ev] })));
+  }
   // Des centaines de marchés courts (crypto au quart d'heure, matchs du jour)
   // sont créés chaque heure : on ne demande que ceux qui finissent dans plus
   // de 2,5 jours, sinon on n'atteint jamais les marchés de 5-7 h

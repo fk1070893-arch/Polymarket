@@ -11,7 +11,7 @@
 import { CLOB } from "../site/js/api.js";
 import { asksOf, eventPrices, walkBooks } from "./arb-lib.mjs";
 import { parseTime } from "./backtest-lib.mjs";
-import { allEventsBetween, getJSON, loadPrevious, mapLimit, writeCache, writeData } from "./lib.mjs";
+import { allEventsBetween, getJSON, loadPrevious, mapLimit, universeEvents, writeCache, writeData } from "./lib.mjs";
 import { normalizeMarket } from "../site/js/normalize.js";
 
 const HOUR = 3600000;
@@ -26,6 +26,11 @@ const MIN_PROFIT = 1; // et l'ensemble au moins 1 $
 // Tous les événements ouverts, pas seulement les plus actifs : c'est sur les
 // petits événements, peu surveillés, que les écarts durent le plus.
 async function openEvents(now) {
+  const shared = await universeEvents();
+  if (shared) {
+    console.log(`${shared.length} événements ouverts (lecture partagée du début du passage)`);
+    return shared;
+  }
   const t = Date.now();
   // Au plus 3 minutes de lecture, pour laisser passer les autres étapes
   const deadline = t + 3 * 60000;

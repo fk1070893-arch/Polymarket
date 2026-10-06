@@ -31,7 +31,7 @@
 
 import { normalizeMarket } from "../site/js/normalize.js";
 import { groupOf, parseTime } from "./backtest-lib.mjs";
-import { allEventsBetween, loadPrevious, loadState, writeState } from "./lib.mjs";
+import { allEventsBetween, loadPrevious, loadState, universeEvents, writeState } from "./lib.mjs";
 import { askPrices, median, paperStats, pnlCurve, settleBets, spreadOf } from "./paper.mjs";
 
 const HOUR = 3600000;
@@ -61,11 +61,13 @@ async function candidates(now, key) {
   // Décompte de chaque filtre, pour vérifier dans les logs que la règle
   // trouve bien des marchés
   const seen = { events: 0, sport: 0, binary: 0, volume: 0, window: 0, quoted: 0 };
-  const events = await allEventsBetween(
-    { tag_slug: "sports", active: "true", closed: "false" },
-    now + WINDOW[0] - 6 * HOUR,
-    now + WINDOW[1] + 6 * HOUR
-  );
+  const from = now + WINDOW[0] - 6 * HOUR;
+  const to = now + WINDOW[1] + 6 * HOUR;
+  const inWindow = (ev) => {
+    const end = parseTime(ev.endDate);
+    return end != null && end >= from && end <= to;
+  };
+  const events = (await universeEvents(inWindow)) ?? (await allEventsBetween({ tag_slug: "sports", active: "true", closed: "false" }, from, to));
   for (const ev of events) {
     seen.events++;
     const tags = (ev.tags ?? []).map((t) => t.slug).filter(Boolean);

@@ -15,8 +15,8 @@
 // Résultat : site/data/odds.json
 
 import { normalizeMarket } from "../site/js/normalize.js";
-import { parseTime } from "./backtest-lib.mjs";
-import { allEventsBetween, loadState, writeState } from "./lib.mjs";
+import { groupOf, parseTime } from "./backtest-lib.mjs";
+import { allEventsBetween, loadState, universeEvents, writeState } from "./lib.mjs";
 import { gameProbs, marketTargets, sameGame, sideProbs } from "./odds-lib.mjs";
 import { askPrices, paperStats, pnlCurve, settleBets } from "./paper.mjs";
 
@@ -132,7 +132,11 @@ async function refreshOdds(state, now) {
 
 // Tous les événements sport Polymarket des 4 prochains jours
 async function polyGames(now) {
-  return allEventsBetween({ tag_slug: "sports", active: "true", closed: "false" }, now, now + 4 * DAY);
+  const soon = (ev) => {
+    const end = parseTime(ev.endDate);
+    return end != null && end >= now && end <= now + 4 * DAY && groupOf((ev.tags ?? []).map((t) => t.slug)) === "sport";
+  };
+  return (await universeEvents(soon)) ?? allEventsBetween({ tag_slug: "sports", active: "true", closed: "false" }, now, now + 4 * DAY);
 }
 
 function compare(state, events, now) {
