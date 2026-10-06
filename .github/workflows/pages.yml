@@ -126,6 +126,14 @@ jobs:
           PAGES_URL: ${{ steps.pages.outputs.base_url }}
           BACKTEST_FORCE: ${{ inputs.backtest }}
 
+      # Chaque publication donne un nouveau nom de version aux fichiers du site,
+      # pour que les navigateurs ne gardent pas l'ancien code en mémoire
+      - name: Version des fichiers du site
+        run: |
+          v="${GITHUB_SHA::7}"
+          sed -i -E "s#(from \"\./[a-z-]+\.js)\"#\1?v=$v\"#g" site/js/*.js
+          sed -i -E "s#(src=\"js/app\.js)\"#\1?v=$v\"#; s#(href=\"css/style\.css)\"#\1?v=$v\"#" site/index.html
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
