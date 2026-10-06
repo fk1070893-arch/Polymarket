@@ -152,6 +152,7 @@ async function metaculus() {
     const out = [];
     let error = null;
     let read = 0;
+    let lastRows = [];
     for (let o = 0; o < 500; o += 100) {
       const data = await metaculusGet(url(o)).catch((err) => {
         error = err.message;
@@ -159,16 +160,7 @@ async function metaculus() {
       });
       const rows = data?.results ?? [];
       read += rows.length;
-      // Diagnostic : structure d'une question sans prévision lisible (noms de champs seulement)
-      const sample = rows.find((r) => metaculusProb(r) == null);
-      if (o === 0 && sample) {
-        const q = sample.question ?? {};
-        const agg = q.aggregations ?? {};
-        const shape = Object.fromEntries(
-          Object.entries(agg).map(([k, v]) => [k, v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k2, v2]) => [k2, v2 && typeof v2 === "object" ? Object.keys(v2) : typeof v2])) : typeof v])
-        );
-        console.log(`Metaculus, forme d'une question : post=${Object.keys(sample).join(",")} | question=${Object.keys(q).join(",")} | aggregations=${JSON.stringify(shape)}`);
-      }
+      if (o === 0) lastRows = rows;
       for (const post of rows) {
         const p = metaculusProb(post);
         const q = post.question ?? post;
@@ -182,6 +174,23 @@ async function metaculus() {
         });
       }
       if (rows.length < 100) break;
+    }
+    // La liste peut renvoyer la prévision vide : on lit alors le détail des
+    // questions les plus suivies, une par une
+    if (read && out.length < 20 && url === urls[0]) {
+      const ids = [...new Set(lastRows.map((r) => r.id))].slice(0, 60);
+      let detailed = 0;
+      for (const id of ids) {
+        const post = await metaculusGet(`https://www.metaculus.com/api/posts/${id}/?with_cp=true`).catch(() => null);
+        if (!post) continue;
+        detailed++;
+        const p = metaculusProb(post);
+        const q = post.question ?? post;
+        if (p != null && !out.some((x) => x.id === post.id))
+          out.push({ id: post.id, text: post.title ?? q.title ?? "", p, end: parseTime(q.scheduled_resolve_time ?? q.scheduled_close_time), url: `https://www.metaculus.com/questions/${post.id}/` });
+        await new Promise((r) => setTimeout(r, 150));
+      }
+      console.log(`Metaculus : détail de ${detailed} questions lu, ${out.length} prévisions au total`);
     }
     if (read) console.log(`Metaculus : ${read} questions lues, ${out.length} avec une prévision publique`);
     if (out.length) return { questions: out, status: `${out.length} questions avec une prévision` };
