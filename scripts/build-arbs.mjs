@@ -11,7 +11,8 @@
 import { CLOB } from "../site/js/api.js";
 import { asksOf, eventPrices, walkBooks } from "./arb-lib.mjs";
 import { parseTime } from "./backtest-lib.mjs";
-import { allEventsBetween, getJSON, loadPrevious, mapLimit, writeData } from "./lib.mjs";
+import { allEventsBetween, getJSON, loadPrevious, mapLimit, writeCache, writeData } from "./lib.mjs";
+import { normalizeMarket } from "../site/js/normalize.js";
 
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
@@ -33,6 +34,32 @@ async function openEvents(now) {
   return events;
 }
 
+// Tous les marchés binaires ouverts, en version compacte, pour l'étape
+// suivante (comparaison avec Kalshi et Metaculus) : évite de tout relire
+function compactMarkets(events) {
+  const out = [];
+  for (const ev of events) {
+    for (const raw of ev.markets ?? []) {
+      const m = normalizeMarket(raw);
+      if (m.closed || !m.active || m.outcomes.length !== 2 || !m.prices.length) continue;
+      out.push({
+        id: m.id,
+        q: m.question,
+        event: String(ev.id),
+        eventTitle: ev.title ?? "",
+        slug: ev.slug ?? "",
+        outcomes: m.outcomes,
+        p: m.prices[0],
+        bid: raw.bestBid ?? null,
+        ask: raw.bestAsk ?? null,
+        volume: Math.round(m.volume),
+        end: parseTime(raw.endDate) ?? parseTime(ev.endDate),
+      });
+    }
+  }
+  return out;
+}
+
 async function book(tokenId) {
   return asksOf(await getJSON(`${CLOB}/book?token_id=${encodeURIComponent(tokenId)}`, 2).catch(() => null));
 }
@@ -49,6 +76,7 @@ async function check(c) {
 async function main(prev) {
   const now = Date.now();
   const events = await openEvents(now);
+  await writeCache("pm-markets.json", compactMarkets(events));
   const candidates = [];
   let negRisk = 0;
   for (const ev of events) {

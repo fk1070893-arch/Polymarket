@@ -209,3 +209,32 @@ test("courbe des gains cumulés", () => {
   assert.equal(c.length, 50);
   assert.deepEqual(c[c.length - 1], [500, 500, 500]);
 });
+
+// ---------- Rapprochement de questions entre sites ----------
+
+import { bestMatch, buildIndex, questionInfo, questionTokens, similarity } from "./match-lib.mjs";
+
+test("mots importants d'une question", () => {
+  assert.deepEqual(questionTokens("Will Bitcoin be above $100,000 on December 31?"), ["bitcoin", "above", "100000", "dec", "31"]);
+  assert.deepEqual(questionTokens("BTC above 100k"), ["btc", "above", "100000"]);
+});
+
+test("similarité : nombres, années et sens doivent concorder", () => {
+  const q = (t) => questionInfo(t);
+  assert.ok(similarity(q("Will the Fed cut rates in December 2026?"), q("Fed cuts rates in December 2026")) > 0.6);
+  assert.equal(similarity(q("Bitcoin above 100000 in 2026"), q("Bitcoin above 110000 in 2026")), 0);
+  assert.equal(similarity(q("Bitcoin above 100000"), q("Bitcoin below 100000")), 0);
+  assert.equal(similarity(q("Will Trump win in 2024?"), q("Will Trump win in 2028?")), 0);
+});
+
+test("meilleure correspondance dans un index", () => {
+  const pm = [
+    { id: 1, q: "Will the Fed cut interest rates in December 2026?" },
+    { id: 2, q: "Will the Fed hike interest rates in December 2026?" },
+    { id: 3, q: "Will Bitcoin reach $150,000 in 2026?" },
+  ];
+  const idx = buildIndex(pm, (x) => x.q);
+  assert.equal(bestMatch(idx, "Fed cuts interest rates December 2026")?.item.id, 1);
+  assert.equal(bestMatch(idx, "Will Ethereum reach $5,000 in 2026?"), null);
+  assert.equal(bestMatch(idx, "Fed cuts interest rates December 2026", { accept: (x) => x.id !== 1 })?.item.id ?? null, null);
+});

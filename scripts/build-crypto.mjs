@@ -14,6 +14,9 @@ import { getJSON, loadPrevious, nowSec, readData, writeData } from "./lib.mjs";
 
 const DERIBIT = "https://www.deribit.com/api/v2/public";
 const COINBASE = "https://api.exchange.coinbase.com";
+// Miroir public des données de marché Binance (l'API principale bloque
+// certains pays, dont les serveurs américains de GitHub)
+const BINANCE = "https://data-api.binance.vision/api/v3";
 const ASSETS = ["BTC", "ETH"];
 const SIGNAL = 0.05; // écart minimum (5 points) pour parler de signal
 const HISTORY_DAYS = 120;
@@ -47,12 +50,31 @@ async function fromCoinbase(asset) {
   return { spot, source: "realized", atmVol: sigma, vol: () => sigma };
 }
 
+// La plupart des marchés crypto de Polymarket se règlent sur le prix
+// Binance (BTCUSDT) : c'est lui qu'on prend comme prix actuel. La
+// volatilité reste celle des options Deribit.
+async function binanceSpot(asset) {
+  const t = await getJSON(`${BINANCE}/ticker/price?symbol=${asset}USDT`, 2);
+  const p = Number(t?.price);
+  if (!(p > 0)) throw new Error("prix Binance invalide");
+  return p;
+}
+
 async function marketData(asset) {
+  let data;
   try {
-    return await fromDeribit(asset);
+    data = await fromDeribit(asset);
   } catch (err) {
     console.log(`Deribit indisponible pour ${asset} (${err.message}), repli sur Coinbase`);
-    return fromCoinbase(asset);
+    data = await fromCoinbase(asset);
+  }
+  try {
+    const spot = await binanceSpot(asset);
+    console.log(`${asset} : prix Binance ${Math.round(spot)} $ (${data.source} : ${Math.round(data.spot)} $)`);
+    return { ...data, spot, spotSource: "binance" };
+  } catch (err) {
+    console.log(`Binance indisponible pour ${asset} (${err.message}), prix ${data.source}`);
+    return { ...data, spotSource: data.source };
   }
 }
 
@@ -210,7 +232,7 @@ async function main() {
     updatedAt: new Date().toISOString(),
     generatedAt: nowSec(),
     signal: SIGNAL,
-    assets: Object.fromEntries(Object.entries(assets).map(([k, v]) => [k, { spot: v.spot, source: v.source, atmVol: v.atmVol }])),
+    assets: Object.fromEntries(Object.entries(assets).map(([k, v]) => [k, { spot: v.spot, spotSource: v.spotSource, source: v.source, atmVol: v.atmVol }])),
     markets,
     events: [...extraEvents.values()],
     record,

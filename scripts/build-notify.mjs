@@ -58,6 +58,19 @@ async function candidates() {
   for (const b of fresh?.bets ?? []) {
     out.push({ key: `fresh:${b.id}`, text: `🆕 Marché neuf à vrai prix : ${b.eventTitle || b.question}\n   1 $ sur Non à ${cents(b.cost)}${link(b.slug)}` });
   }
+  const cross = await readOr("cross-state.json");
+  for (const b of cross?.bets ?? []) {
+    out.push({
+      key: `cross:${b.id}`,
+      text: `🔁 Moins cher que Kalshi : ${b.question}\n   1 $ sur ${b.outcome === "Yes" ? "Oui" : b.outcome === "No" ? "Non" : b.outcome} à ${cents(b.cost)} (Kalshi ${Math.round(b.kalshi * 100)} %)`,
+    });
+  }
+  for (const a of cross?.arbs ?? []) {
+    out.push({
+      key: `arb:x:${a.marketId}:${a.label}`,
+      text: `💰 Anomalie Polymarket / Kalshi : ${a.question}\n   ${a.label} : ${cents(a.cost)} pour 1 $ sûr (frais compris) — vérifier que les règles sont identiques${link(a.slug)}`,
+    });
+  }
   const arbs = await readOr("arbs.json");
   for (const f of arbs?.found ?? []) {
     out.push({

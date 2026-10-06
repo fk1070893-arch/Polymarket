@@ -308,6 +308,87 @@ function arbsSection(st) {
     </section>`;
 }
 
+// ---------- Kalshi et Metaculus ----------
+
+const yesNo = (o) => (o === "Yes" ? "Oui" : o === "No" ? "Non" : o);
+
+function crossSection(st) {
+  const title = "Les mêmes questions sur Kalshi et Metaculus";
+  if (st === null) return loading(title);
+  if (!st?.updatedAt) return `<section class="verdict live" id="strat-kalshi"><h2>${title}</h2><p>La comparaison démarre au prochain passage de la GitHub Action.</p></section>`;
+  const s = st.summary ?? {};
+  const gap = (v) => `${v > 0 ? "+" : ""}${Math.round(v * 100)} pts`;
+  const pairs = (st.pairs ?? []).slice(0, 15);
+  const meta = (st.metaculus ?? []).slice(0, 12);
+  return `
+    <section class="verdict live" id="strat-kalshi">
+      <h2>${title}</h2>
+      <p><b>Kalshi</b> est un site de paris régulé aux États-Unis, avec beaucoup de questions communes (Fed, inflation, élections, sport).
+        Quand les deux sites ne donnent pas la même probabilité, l'un des deux se trompe. Les questions sont rapprochées par leurs mots importants ;
+        les paires dont les nombres, les années ou le sens diffèrent sont écartées.</p>
+      ${started(st)}
+      <p class="muted small">${esc(st.kalshiStatus ?? "")} · ${st.pmMarkets ?? 0} marchés Polymarket · <b>${st.pairCount ?? 0}</b> questions communes trouvées.</p>
+      ${stats(s)}
+      ${verdict(s)}
+      ${
+        (st.arbs ?? []).length
+          ? `<h3>Anomalies entre sites</h3>
+            <p class="muted small">Acheter « Oui » sur un site et « Non » sur l'autre coûte moins de 1 $ (frais Kalshi compris) : gain sûr <b>si les deux questions se règlent vraiment pareil</b>. Lis toujours les règles des deux côtés : c'est là que se cachent les pièges (date, source, cas limites).</p>
+            <div class="table-wrap"><table class="bt-table">
+              <thead><tr><th>Question</th><th>Acheter</th><th class="num">Coût pour 1 $</th><th class="num">Gain sûr</th></tr></thead>
+              <tbody>${st.arbs
+                .slice(0, 10)
+                .map(
+                  (a) => `<tr><td><a href="https://polymarket.com/event/${esc(a.slug)}" target="_blank" rel="noopener noreferrer">${esc(a.question)}</a>
+                    <span class="muted small"> · Kalshi : ${esc(a.kalshiText)}</span></td>
+                    <td>${esc(a.label)}</td><td class="num">${cents(a.cost)}</td><td class="num up">+${cents(a.profit)}</td></tr>`
+                )
+                .join("")}</tbody>
+            </table></div>`
+          : ""
+      }
+      ${
+        pairs.length
+          ? `<h3>Plus gros écarts entre Polymarket et Kalshi</h3>
+            <div class="table-wrap"><table class="bt-table">
+              <thead><tr><th>Question (Polymarket / Kalshi)</th><th class="num">Polymarket</th><th class="num">Kalshi</th><th class="num">Écart</th></tr></thead>
+              <tbody>${pairs
+                .map(
+                  (p) => `<tr><td>${esc(p.question)}<span class="muted small"><br />Kalshi : ${esc(p.kalshi.text)} · ressemblance ${Math.round(p.sim * 100)} %</span></td>
+                    <td class="num">${pct(p.pmMid)}</td><td class="num">${pct(p.kalshi.mid)}</td>
+                    <td class="num">${Math.abs(p.gap) >= 0.05 ? `<b>${gap(p.gap)}</b>` : gap(p.gap)}</td></tr>`
+                )
+                .join("")}</tbody>
+            </table></div>`
+          : `<p class="muted">Aucune question commune trouvée pour l'instant.</p>`
+      }
+      ${betList(st.bets, (b) => ({
+        title: b.eventTitle || b.question,
+        sub: `${b.question !== b.eventTitle ? `${esc(b.question)} · ` : ""}Kalshi ${pct(b.kalshi)} · écart ${Math.round(b.edge * 100)} pts`,
+        pick: `1 $ sur <b>${esc(yesNo(b.outcome))}</b> à ${cents(b.cost)}`,
+      }))}
+      <h3>Second avis : Metaculus</h3>
+      <p>Les prévisions d'une communauté de prévisionnistes, réputées bien calibrées en géopolitique, science et technologie. Pas de pari ici, seulement une comparaison.</p>
+      <p class="muted small">${esc(st.metaculusStatus ?? "")} · ${st.metaculusCount ?? 0} questions communes avec Polymarket.</p>
+      ${
+        meta.length
+          ? `<div class="table-wrap"><table class="bt-table">
+              <thead><tr><th>Question (Polymarket / Metaculus)</th><th class="num">Polymarket</th><th class="num">Metaculus</th><th class="num">Écart</th></tr></thead>
+              <tbody>${meta
+                .map(
+                  (m) => `<tr><td>${esc(m.question)}<span class="muted small"><br /><a href="${esc(m.metaculus.url)}" target="_blank" rel="noopener noreferrer">Metaculus : ${esc(
+                    m.metaculus.text
+                  )}</a> · ressemblance ${Math.round(m.sim * 100)} %</span></td>
+                    <td class="num">${pct(m.pmMid)}</td><td class="num">${pct(m.metaculus.p)}</td>
+                    <td class="num">${Math.abs(m.gap) >= 0.1 ? `<b>${gap(m.gap)}</b>` : gap(m.gap)}</td></tr>`
+                )
+                .join("")}</tbody>
+            </table></div>`
+          : ""
+      }
+    </section>`;
+}
+
 // ---------- Tableau de bord ----------
 
 // Statut d'une stratégie, toujours avec un libellé (jamais la couleur seule)
@@ -329,6 +410,7 @@ function cards(state) {
     { id: "copy", name: "Copier les paris suspects", s: state.copy?.summary, curve: state.copy?.summary?.curve, anchor: "strat-copie" },
     { id: "odds", name: "Moins cher que les bookmakers", s: state.odds?.summary, curve: state.odds?.summary?.curve, anchor: "strat-bookmakers" },
     { id: "fresh", name: "Marchés neufs, au vrai prix", s: state.fresh?.summary, curve: state.fresh?.summary?.curve, anchor: "strat-neufs" },
+    { id: "cross", name: "Moins cher que Kalshi", s: state.cross?.summary, curve: state.cross?.summary?.curve, anchor: "strat-kalshi" },
   ];
   return `
     <section class="dash" aria-label="Tableau de bord des stratégies">
@@ -382,6 +464,7 @@ export function renderStrategies(ctx) {
     ${favoritesSection(state.strategy)}
     ${copySection(state.copy)}
     ${oddsSection(state.odds)}
+    ${crossSection(state.cross)}
     ${freshSection(state.fresh)}
     ${arbsSection(state.arbs)}
     <section class="caveats">
@@ -401,6 +484,7 @@ export function renderStrategies(ctx) {
     copy: state.copy?.summary?.curve,
     odds: state.odds?.summary?.curve,
     fresh: state.fresh?.summary?.curve,
+    cross: state.cross?.summary?.curve,
   };
   for (const box of body.querySelectorAll("[data-curve]")) pnlChart(box, curves[box.dataset.curve]);
   if (!boundDash) {

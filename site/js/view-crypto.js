@@ -148,7 +148,7 @@ export function renderCrypto(ctx) {
         <div class="stat">
           <span>${a}</span>
           <strong>${fmtPrice.format(v.spot)} $</strong>
-          <em class="muted">Volatilité ${(v.atmVol * 100).toFixed(0)} % · ${v.source === "deribit" ? "implicite (options Deribit)" : "historique 30 j (Deribit indisponible)"}</em>
+          <em class="muted">${v.spotSource === "binance" ? "Prix Binance (référence des marchés Polymarket) · " : ""}Volatilité ${(v.atmVol * 100).toFixed(0)} % · ${v.source === "deribit" ? "implicite (options Deribit)" : "historique 30 j (Deribit indisponible)"}</em>
         </div>`
         )
         .join("")}
@@ -222,7 +222,7 @@ export function renderCrypto(ctx) {
       <ul>
         <li><b>Le modèle n'est pas magique.</b> Il suppose des variations de prix « normales » ; les krachs et les envolées soudaines sont plus fréquents dans la réalité.</li>
         <li><b>Les options sont « neutres au risque ».</b> La probabilité Deribit intègre une prime de risque : elle surestime un peu les mouvements extrêmes.</li>
-        <li><b>La référence diffère.</b> Polymarket se base en général sur le prix Binance à une heure précise, Deribit sur son propre indice : quelques dizaines de dollars d'écart possibles.</li>
+        <li><b>Même référence que Polymarket.</b> Le prix actuel vient de Binance, sur lequel se règlent la plupart des marchés crypto de Polymarket ; seule la volatilité vient des options Deribit.</li>
         <li><b>Un écart sur un petit marché</b> (peu de liquidité) peut juste venir d'un manque d'acheteurs, pas d'une erreur.</li>
         <li><b>Rejoué sur le passé, le modèle fait jeu égal avec Polymarket.</b> Un écart ne veut donc pas dire que Polymarket se trompe. Le suivi en direct ci-dessus dira, avec le temps, si ça change.</li>
       </ul>

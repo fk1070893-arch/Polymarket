@@ -48,6 +48,7 @@ const state = {
   odds: null, // test en direct : bookmakers
   arbs: null, // anomalies de prix
   fresh: null, // test en direct : marchés tout neufs
+  cross: null, // Kalshi et Metaculus
   backtest: null, // résultats du backtest (null = pas encore chargé, false = indisponible)
   crypto: null, // modèle crypto (null = pas encore chargé, false = indisponible)
   marketStates: {}, // prix / résultats des marchés hors liste (portefeuille)
@@ -767,6 +768,7 @@ async function refreshStrategy() {
     load("odds", () => loadData("odds")),
     load("arbs", () => loadData("arbs")),
     load("fresh", () => loadData("fresh")),
+    load("cross", () => loadData("cross")),
   ]);
 }
 

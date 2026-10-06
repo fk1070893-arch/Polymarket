@@ -14,6 +14,7 @@
     "fresh": "node scripts/build-fresh.mjs",
     "odds": "node scripts/build-odds.mjs",
     "notify": "node scripts/build-notify.mjs",
+    "cross": "node scripts/build-cross.mjs",
     "test": "node --test scripts/*.test.mjs",
     "start": "npx --yes serve site"
   }

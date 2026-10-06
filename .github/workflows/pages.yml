@@ -87,6 +87,14 @@ jobs:
         env:
           PAGES_URL: ${{ steps.pages.outputs.base_url }}
 
+      # Mêmes questions sur Kalshi et Metaculus (réutilise les marchés lus juste avant)
+      - name: Comparaison Kalshi et Metaculus
+        run: node scripts/build-cross.mjs
+        continue-on-error: true
+        timeout-minutes: 4
+        env:
+          PAGES_URL: ${{ steps.pages.outputs.base_url }}
+
       # Clé gratuite The Odds API dans le secret ODDS_API_KEY (jamais affichée) ;
       # sans clé, l'étape se contente de régler les paris déjà pris
       - name: Test en direct - sport contre bookmakers

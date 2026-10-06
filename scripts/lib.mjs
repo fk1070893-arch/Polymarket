@@ -120,3 +120,19 @@ export async function allEventsBetween(params, from, to, opts = {}) {
   for (const ev of await eventsBetween(params, from, to, opts)) seen.set(String(ev.id), ev);
   return [...seen.values()];
 }
+
+// Cache local entre deux étapes d'un même passage (jamais publié : hors de site/)
+const CACHE_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", ".cache");
+
+export async function writeCache(name, data) {
+  await mkdir(CACHE_DIR, { recursive: true });
+  await writeFile(join(CACHE_DIR, name), JSON.stringify(data));
+}
+
+export async function readCache(name) {
+  try {
+    return JSON.parse(await readFile(join(CACHE_DIR, name), "utf8"));
+  } catch {
+    return null;
+  }
+}
