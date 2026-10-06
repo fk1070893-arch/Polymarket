@@ -483,7 +483,7 @@ export function renderBacktest(ctx) {
       ${horizonSection(
         data.fresh,
         "fresh",
-        "Prix 6 h et 24 h après l'ouverture d'un marché (marchés d'au moins 3 jours), quand il y a encore peu de traders."
+        "Prix 6 h et 24 h après l'ouverture d'un marché (marchés d'au moins 3 jours), quand il y a encore peu de traders. <b>Attention :</b> le test en direct (onglet Stratégies) montre que ces prix autour de 50 % sont le plus souvent des prix fantômes : le « Non » n'y est pas à vendre à ce prix. Les gains ci-dessous ne sont pas atteignables."
       )}
     </section>
 

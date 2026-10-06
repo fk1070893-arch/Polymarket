@@ -14,7 +14,7 @@ import { GAMMA } from "../site/js/api.js";
 import { normalizeMarket } from "../site/js/normalize.js";
 import { parseTime } from "./backtest-lib.mjs";
 import { getJSON, loadPrevious, writeData } from "./lib.mjs";
-import { askPrices, median, paperStats, settleBets, spreadOf } from "./paper.mjs";
+import { askPrices, paperStats, settleBets, spreadOf } from "./paper.mjs";
 
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
@@ -22,12 +22,13 @@ const AGE = [5 * HOUR, 7 * HOUR]; // âge du marché au moment du pari
 const BAND = [0.4, 0.6]; // prix « Oui » affiché
 const MIN_LIFE = 3 * DAY; // comme dans le backtest : marchés d'au moins 3 jours
 const MIN_VOLUME = 1000; // volume final, vérifié à la clôture comme dans le backtest
+const MAX_COST = 0.7; // au-delà, le « Non » coûte bien plus que le prix affiché : prix fantôme
 const KEEP_FOR = 180 * DAY;
 const NOISE = /\bup or down\b/i;
 
 const RULE = {
   description:
-    "Marchés de 5 à 7 h, prévus pour durer au moins 3 jours, dont le « Oui » est affiché entre 40 et 60 % : 1 $ fictif sur « Non » au vrai prix vendeur du carnet d'ordres. Résultat compté sur les marchés finis avec au moins 1 000 $ de volume, comme dans le backtest.",
+    "Marchés de 5 à 7 h, prévus pour durer au moins 3 jours, dont le « Oui » est affiché entre 40 et 60 % : 1 $ fictif sur « Non » au vrai prix vendeur du carnet d'ordres, seulement s'il est de 70 ¢ ou moins (sinon le prix affiché est un prix fantôme). Résultat compté sur les marchés finis avec au moins 1 000 $ de volume, comme dans le backtest.",
 };
 
 
@@ -90,12 +91,36 @@ async function youngMarkets(now) {
   return [];
 }
 
+// Prix réellement payé pour le « Non », par tranche
+const COST_BUCKETS = [
+  { key: "none", label: "aucun vendeur" },
+  { key: "le60", label: "60 ¢ ou moins", max: 0.6 },
+  { key: "le70", label: "61 à 70 ¢", max: 0.7 },
+  { key: "le90", label: "71 à 90 ¢", max: 0.9 },
+  { key: "le97", label: "91 à 97 ¢", max: 0.97 },
+  { key: "gt97", label: "plus de 97 ¢", max: Infinity },
+];
+const costBucket = (cost) => (cost == null ? "none" : COST_BUCKETS.find((x) => x.max != null && cost <= x.max).key);
+
 async function main(prev) {
   const now = Date.now();
-  const bets = (prev.bets ?? []).filter((b) => now - b.placedAt < KEEP_FOR);
-  const known = new Set([...bets.map((b) => b.marketId), ...(prev.skipped ?? []).map((s) => s.marketId)]);
-  const skipped = (prev.skipped ?? []).filter((s) => now - s.seenAt < 30 * DAY);
-  const seen = { markets: 0, age: 0, band: 0, quoted: 0, noQuote: 0 };
+  // Premier passage (avant le seuil de prix) : on garde les chiffres, pas
+  // les milliers de paris à 99 ¢
+  const counts = prev.counts ?? Object.fromEntries(COST_BUCKETS.map((x) => [x.key, 0]));
+  const seenIds = prev.seenIds ?? {};
+  if (!prev.counts && prev.bets) {
+    for (const b of prev.bets) {
+      counts[costBucket(b.cost)]++;
+      seenIds[b.marketId] = b.placedAt;
+    }
+    for (const x of prev.skipped ?? []) {
+      counts.none++;
+      seenIds[x.marketId] = x.seenAt;
+    }
+  }
+  for (const [id, t] of Object.entries(seenIds)) if (now - t > 12 * HOUR) delete seenIds[id];
+  const bets = (prev.bets ?? []).filter((b) => now - b.placedAt < KEEP_FOR && b.cost <= MAX_COST);
+  const seen = { markets: 0, age: 0, band: 0, bet: 0 };
 
   for (const raw of await youngMarkets(now)) {
     seen.markets++;
@@ -107,34 +132,41 @@ async function main(prev) {
     if (age < AGE[0] || age > AGE[1] || end - start < MIN_LIFE) continue;
     seen.age++;
     const p = m.prices[0];
-    if (!(p >= BAND[0] && p <= BAND[1]) || known.has(m.id)) continue;
+    if (!(p >= BAND[0] && p <= BAND[1]) || seenIds[m.id]) continue;
     seen.band++;
-    known.add(m.id);
+    seenIds[m.id] = now;
+    const cost = askPrices(raw)[1];
+    counts[costBucket(cost)]++;
+    // Prix fantôme : pas de vendeur, ou un « Non » bien plus cher qu'affiché
+    if (cost == null || cost > MAX_COST) continue;
+    seen.bet++;
     const ev = raw.events?.[0];
-    const info = {
+    bets.push({
+      id: m.id,
       marketId: m.id,
       event: ev?.id != null ? String(ev.id) : m.id,
       eventTitle: ev?.title ?? "",
       slug: ev?.slug ?? "",
       question: m.question,
       p,
-      // Événement à plusieurs issues exclusives : suspect n°1 du prix fantôme
+      // Événement à plusieurs issues exclusives
       multi: raw.negRisk === true,
       spread: spreadOf(raw),
-    };
-    const cost = askPrices(raw)[1];
-    if (cost == null) {
-      seen.noQuote++;
-      skipped.push({ ...info, seenAt: now });
-      continue;
-    }
-    seen.quoted++;
-    bets.push({ ...info, id: m.id, side: 1, mid: 1 - p, cost, end, placedAt: now, won: null, roi: null });
+      side: 1,
+      mid: 1 - p,
+      cost,
+      end,
+      placedAt: now,
+      won: null,
+      roi: null,
+    });
   }
   console.log(
-    `Filtres : ${seen.markets} marchés récents, ${seen.age} de 5-7 h prévus pour 3 jours ou plus, ${seen.band} cotés 40-60 % : ` +
-      `${seen.quoted} avec un vendeur de « Non », ${seen.noQuote} sans aucun vendeur`
+    `Filtres : ${seen.markets} marchés récents, ${seen.age} de 5-7 h prévus pour 3 jours ou plus, ${seen.band} nouveaux cotés 40-60 %, ` +
+      `${seen.bet} avec un vrai prix (« Non » à ${MAX_COST * 100} ¢ ou moins)`
   );
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  console.log(`Depuis le début : ${total} marchés, prix du « Non » : ${COST_BUCKETS.map((x) => `${x.label} ${counts[x.key]}`).join(", ")}`);
 
   // Les marchés peuvent se régler avant leur date prévue : tout ce qui est
   // en attente est revérifié une fois par heure
@@ -142,8 +174,6 @@ async function main(prev) {
 
   const settled = bets.filter((b) => b.won != null);
   const done = settled.filter((b) => (b.finalVolume ?? 0) >= MIN_VOLUME);
-  // Ce qu'on a vraiment payé, comparé au prix affiché
-  const premium = bets.map((b) => b.cost - b.mid).filter(Number.isFinite);
   const summary = {
     ...paperStats(done),
     pending: bets.length - settled.length,
@@ -151,16 +181,10 @@ async function main(prev) {
     all: paperStats(settled),
     multi: paperStats(done.filter((b) => b.multi), { seed: 21 }),
     single: paperStats(done.filter((b) => !b.multi), { seed: 23 }),
-    quoted: bets.length,
-    noQuote: skipped.length,
-    medianCost: median(bets.map((b) => b.cost)),
-    medianPremium: median(premium),
+    total,
+    counts: COST_BUCKETS.map((x) => ({ ...x, max: undefined, n: counts[x.key] })),
   };
-  const pc = (v) => (v == null ? "—" : `${Math.round(v * 100)}`);
-  console.log(
-    `${bets.length} paris (${summary.pending} en attente, ${summary.n ?? 0} réglés), ${skipped.length} marchés sans vendeur ; ` +
-      `prix payé médian ${pc(summary.medianCost)} ¢, soit ${pc(summary.medianPremium)} ¢ de plus que le prix affiché`
-  );
+  console.log(`${bets.length} paris (${summary.pending} en attente, ${summary.n ?? 0} réglés)`);
 
   bets.sort((a, b) => b.placedAt - a.placedAt);
   return {
@@ -169,7 +193,8 @@ async function main(prev) {
     rule: RULE,
     summary,
     bets,
-    skipped: skipped.slice(-500),
+    counts,
+    seenIds,
   };
 }
 

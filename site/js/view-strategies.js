@@ -197,20 +197,26 @@ function freshSection(st) {
   if (st === null) return loading(title);
   if (!st?.summary) return `<section class="verdict live"><h2>${title}</h2><p>Le test démarre au prochain passage de la GitHub Action.</p></section>`;
   const s = st.summary;
-  const seen = (s.quoted ?? 0) + (s.noQuote ?? 0);
-  const cents0 = (v) => (v == null ? "—" : `${Math.round(v * 100)} ¢`);
   const sub = (x, label) => (x?.n ? `<li>${label} : ${x.n} pari${x.n > 1 ? "s" : ""}, <b class="${cls(x.roi)}">${sp(x.roi)}</b> par pari</li>` : "");
   const details = [sub(s.multi, "Événements à plusieurs candidats"), sub(s.single, "Questions simples oui / non")].join("");
+  const counts = s.counts ?? [];
+  const total = s.total ?? 0;
+  const phantom = counts.filter((c) => ["none", "le90", "le97", "gt97"].includes(c.key)).reduce((a, c) => a + c.n, 0);
   return `
     <section class="verdict live" id="strat-neufs">
       <h2>${title}</h2>
-      <p>Le backtest dit : un marché affiché 40-60 % six heures après son ouverture ne se réalise que 22 % du temps, et acheter « Non » aurait rapporté +44 % par pari.
-        Mais c'est peut-être un <b>prix fantôme</b> (50 % par défaut, faute d'échanges). Ici, on regarde le <b>vrai prix de vente</b> du « Non » dans le carnet d'ordres.</p>
+      <p>Le backtest disait : un marché affiché 40-60 % six heures après son ouverture ne se réalise que 22 % du temps, et acheter « Non » aurait rapporté +44 % par pari.
+        Ici, on regarde le <b>vrai prix de vente</b> du « Non » dans le carnet d'ordres.</p>
       ${started(st)}
       ${
-        seen
-          ? `<p><b>${seen}</b> marché${seen > 1 ? "s" : ""} repéré${seen > 1 ? "s" : ""} : ${s.noQuote ?? 0} sans aucun vendeur de « Non » (prix fantôme pur),
-              ${s.quoted ?? 0} avec un vendeur. Prix payé médian <b>${cents0(s.medianCost)}</b>, soit <b>${cents0(s.medianPremium)}</b> de plus que le prix affiché.</p>`
+        total
+          ? `<p>${phantom / total > 0.5 ? "<b>Verdict : c'est surtout un prix fantôme.</b> " : ""}Sur <b>${total}</b> marchés repérés, <b>${phantom}</b> (${pct(phantom / total)}) n'ont aucun vendeur de « Non »
+              ou le vendent plus de 70 ¢ alors qu'il est affiché autour de 50 ¢. Le gain du backtest n'existe pas pour eux.</p>
+            <div class="table-wrap"><table class="bt-table">
+              <thead><tr><th>Vrai prix du « Non »</th><th class="num">Marchés</th><th class="num">Part</th></tr></thead>
+              <tbody>${counts.map((c) => `<tr><td>${esc(c.label)}</td><td class="num">${c.n}</td><td class="num">${pct(c.n / total)}</td></tr>`).join("")}</tbody>
+            </table></div>
+            <p>On continue de parier seulement quand le « Non » se vend vraiment 70 ¢ ou moins : est-ce que ceux-là gagnent ?</p>`
           : `<p class="muted">Aucun marché repéré pour l'instant.</p>`
       }
       ${stats(s)}
