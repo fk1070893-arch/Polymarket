@@ -3,6 +3,7 @@
 import { cents, esc, money, pct, shortDateFmt, signedMoney, translateOutcome } from "./format.js";
 import { START_CASH, exportPortfolio, importPortfolio, resetPortfolio, sell, stats } from "./portfolio.js";
 import { strategySummaries } from "./status.js";
+import { exitEstimate, quoteSell } from "./execution.js";
 
 const $ = (id) => document.getElementById(id);
 let bound = false;
@@ -28,6 +29,11 @@ function verdict(s) {
     <p>${line}</p>${mood}`;
 }
 
+function resaleOf(ctx, pos) {
+  const m = ctx.marketOf(pos);
+  return m ? exitEstimate(m, pos.outcomeIndex, pos.feeParams ?? m.fee) : null;
+}
+
 function positionRow(ctx, p) {
   const ev = ctx.state.events.find((e) => e.id === p.eventId);
   const title = `<span class="pos-title">${
@@ -37,18 +43,20 @@ function positionRow(ctx, p) {
 
   if (p.status === "open") {
     const now = ctx.currentPrice(p.marketId, p.outcomeIndex);
-    const value = p.shares * (now ?? p.price);
+    // Valeur si revendue maintenant : meilleur prix acheteur, frais déduits
+    const exit = resaleOf(ctx, p);
+    const value = p.shares * (exit ?? now ?? p.price);
     const pnl = value - p.stake;
     return `
       <div class="pos">
         <div class="pos-info">
           ${title}
-          <span class="pos-pick">${pick} · acheté à ${cents(p.price)} le ${shortDateFmt.format(new Date(p.at))}</span>
+          <span class="pos-pick">${pick} · acheté à ${cents(p.price)}${p.shown != null && Math.abs(p.shown - p.price) > 0.0005 ? ` tout compris (affiché ${cents(p.shown)})` : ""} le ${shortDateFmt.format(new Date(p.at))}</span>
         </div>
         <div class="pos-nums">
           <span>Mise <b>${money.format(p.stake)}</b></span>
           <span>Prix actuel <b>${now == null ? "?" : cents(now)}</b></span>
-          <span>Valeur <b>${money.format(value)}</b></span>
+          <span title="Si tu revendais maintenant : meilleur prix acheteur, frais déduits">Valeur <b>${money.format(value)}</b></span>
           <span class="${pnl >= 0 ? "up" : "down"}"><b>${signedMoney(pnl)}</b></span>
         </div>
         <button type="button" class="btn small" data-sell="${esc(p.id)}" ${now == null ? "disabled title='Prix actuel inconnu'" : ""}>Vendre</button>
@@ -85,13 +93,21 @@ function bind(ctx) {
     const sellBtn = e.target.closest("[data-sell]");
     if (sellBtn) {
       const pos = state.portfolio.positions.find((x) => x.id === sellBtn.dataset.sell);
-      const price = pos && ctx.currentPrice(pos.marketId, pos.outcomeIndex);
-      if (price == null) return;
-      const value = pos.shares * price;
-      if (!confirm(`Revendre cette prédiction au prix actuel (${cents(price)}) pour ${money.format(value)} ?`)) return;
-      sell(state.portfolio, pos.id, price);
-      ctx.toast(`Revendu pour ${money.format(value)} (${signedMoney(value - pos.stake)}).`, "ok");
-      renderPortfolio(ctx);
+      const m = pos && ctx.marketOf(pos);
+      if (!m) return;
+      sellBtn.disabled = true;
+      // Revente aux acheteurs du carnet d'ordres, frais déduits
+      quoteSell({ ...m, fee: pos.feeParams ?? m.fee }, pos.outcomeIndex, pos.shares).then((q) => {
+        sellBtn.disabled = false;
+        if (!q) return;
+        const value = q.value;
+        const how = q.source === "affiché" ? "au prix affiché (carnet indisponible)" : `à ${cents(q.price)} en moyenne chez les acheteurs`;
+        const fee = q.fee > 0.00005 ? `, moins ${cents(q.fee)} de frais par part` : "";
+        if (!confirm(`Revendre ${how}${fee} : tu récupères ${money.format(value)} (${signedMoney(value - pos.stake)}). Confirmer ?`)) return;
+        sell(state.portfolio, pos.id, q.net);
+        ctx.toast(`Revendu pour ${money.format(value)} (${signedMoney(value - pos.stake)}).`, "ok");
+        renderPortfolio(ctx);
+      });
       return;
     }
     if (e.target.closest("#pf-export")) {
@@ -161,7 +177,7 @@ export function renderPortfolio(ctx) {
   bind(ctx);
   const { state } = ctx;
   const p = state.portfolio;
-  const s = stats(p, (pos) => ctx.currentPrice(pos.marketId, pos.outcomeIndex));
+  const s = stats(p, (pos) => resaleOf(ctx, pos) ?? ctx.currentPrice(pos.marketId, pos.outcomeIndex));
   const open = p.positions.filter((x) => x.status === "open");
   const closed = p.positions.filter((x) => x.status !== "open");
 

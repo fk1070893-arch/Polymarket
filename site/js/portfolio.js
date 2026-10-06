@@ -53,8 +53,9 @@ export function resetPortfolio() {
   return p;
 }
 
-export function buy(p, { event, market, outcomeIndex, amount }) {
-  const price = market.prices[outcomeIndex];
+// quote : prix réellement obtenu (execution.js) ; sans lui, prix affiché
+export function buy(p, { event, market, outcomeIndex, amount, quote = null }) {
+  const price = quote?.cost ?? market.prices[outcomeIndex];
   if (!(amount > 0)) throw new Error("Montant invalide");
   if (amount > p.cash + 1e-9) throw new Error("Solde fictif insuffisant");
   if (!(price > 0 && price < 1)) throw new Error("Ce marché n'a pas de prix exploitable");
@@ -69,7 +70,13 @@ export function buy(p, { event, market, outcomeIndex, amount }) {
     marketLabel: event.markets.length > 1 ? market.label || market.question : "",
     outcomeIndex,
     outcome: market.outcomes[outcomeIndex] ?? "",
+    // Prix par part tout compris (glissement et frais), et son détail
     price,
+    shown: market.prices[outcomeIndex] ?? null,
+    fee: quote?.fee ?? 0,
+    slippage: quote?.slippage ?? 0,
+    tokens: market.tokens ?? null,
+    feeParams: market.fee ?? null,
     stake: Math.round(amount * 100) / 100,
     shares: amount / price,
     status: "open",
@@ -99,11 +106,14 @@ export function settle(p, states) {
   for (const pos of p.positions) {
     if (pos.status !== "open") continue;
     const st = states[pos.marketId];
-    if (!st?.x || st.w == null) continue;
-    const won = st.w === pos.outcomeIndex;
+    if (!st?.x || (st.w == null && !st.s)) continue;
+    // Marché annulé, réglé 50/50 (st.s) : 0,50 $ par part
+    const pay = st.w == null ? 0.5 : st.w === pos.outcomeIndex ? 1 : 0;
+    const won = pay === 1;
     pos.status = won ? "won" : "lost";
-    pos.exitPrice = won ? 1 : 0;
-    pos.payout = won ? Math.round(pos.shares * 100) / 100 : 0;
+    if (pay === 0.5) pos.split = true;
+    pos.exitPrice = pay;
+    pos.payout = Math.round(pos.shares * pay * 100) / 100;
     pos.closedAt = Date.now();
     p.cash = Math.round((p.cash + pos.payout) * 100) / 100;
     changed++;

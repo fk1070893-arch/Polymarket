@@ -91,7 +91,7 @@ async function main(prev, alerts) {
 
   // Un marché peut finir avant sa date prévue : on vérifie tout ce qui est en attente
   await settleBets(bets, now, { graceMs: -Infinity });
-  for (const b of bets) if (b.won != null && b.roiInsider == null) b.roiInsider = roiAt(b.insiderPrice, b.won);
+  for (const b of bets) if (b.won != null && b.roiInsider == null) b.roiInsider = b.split ? 0.5 / b.insiderPrice - 1 : roiAt(b.insiderPrice, b.won);
 
   const settled = bets.filter((b) => b.won != null);
   const summary = {

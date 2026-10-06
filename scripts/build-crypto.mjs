@@ -8,7 +8,8 @@
 // Usage : node scripts/build-crypto.mjs (après build-snapshot.mjs)
 
 import { GAMMA } from "../site/js/api.js";
-import { normalizeEvents, normalizeMarket, winnerIndex, yesPrice } from "../site/js/normalize.js";
+import { normalizeEvents, normalizeMarket, payoutOf, yesPrice } from "../site/js/normalize.js";
+import { feePerShare } from "../site/js/fees.js";
 import { buildSurface, modelProbability, parseCryptoQuestion, realizedVol, surfaceVol } from "./crypto-model.mjs";
 import { getJSON, loadPrevious, nowSec, readData, writeData } from "./lib.mjs";
 
@@ -121,8 +122,9 @@ async function resolveOutcomes(history) {
     ];
     for (const r of rows) {
       const m = normalizeMarket(r);
-      const w = winnerIndex(m);
-      if (history[m.id] && w != null) history[m.id].outcome = w === 0 ? 1 : 0;
+      // 1 si « Oui » gagne, 0 sinon, 0,5 si le marché est annulé (50/50)
+      const pay = payoutOf(m, 0);
+      if (history[m.id] && pay != null) history[m.id].outcome = pay;
     }
   }
 }
@@ -135,7 +137,9 @@ function trackRecord(history) {
   if (n === 0) return { resolved: 0 };
   const brier = (key) => done.reduce((s, h) => s + (h.at24[key] - h.outcome) ** 2, 0) / n;
 
-  // Si on avait suivi chaque signal (1 $ par signal, 24 h avant l'échéance)
+  // Si on avait suivi chaque signal (1 $ par signal, 24 h avant l'échéance),
+  // au prix réellement payé : meilleur prix vendeur + frais preneur. Les
+  // signaux enregistrés avant (sans prix vendeur) gardent le prix affiché.
   let bets = 0;
   let pnl = 0;
   let wins = 0;
@@ -143,11 +147,16 @@ function trackRecord(history) {
     const { model, poly } = h.at24;
     const edge = model - poly;
     if (Math.abs(edge) < SIGNAL || poly < 0.03 || poly > 0.97) continue;
+    const side = edge > 0 ? 0 : 1;
+    const shown = side === 0 ? h.at24.ask : h.at24.bid != null ? 1 - h.at24.bid : null;
+    const base = shown > 0 && shown < 1 ? shown : side === 0 ? poly : 1 - poly;
+    const price = Math.min(0.999, base + feePerShare(h.at24.fee, base));
+    // Le signal doit tenir au prix payé, pas seulement au prix affiché
+    if ((side === 0 ? model : 1 - model) - price < SIGNAL / 2) continue;
     bets++;
-    const won = edge > 0 ? h.outcome === 1 : h.outcome === 0;
-    const price = edge > 0 ? poly : 1 - poly;
-    if (won) wins++;
-    pnl += won ? 1 / price - 1 : -1;
+    const pay = side === 0 ? h.outcome : 1 - h.outcome;
+    if (pay === 1) wins++;
+    pnl += pay / price - 1;
   }
   return { resolved: n, brierModel: brier("model"), brierPoly: brier("poly"), signalBets: bets, signalWins: wins, signalPnl: pnl };
 }
@@ -214,7 +223,7 @@ async function main() {
       // Historique : on fige les probabilités à 24 h de l'échéance
       const h = history[m.id] ?? { date, asset: parsed.asset, question: m.question, first: { model: row.model, poly: row.poly, at: now } };
       h.last = { model: row.model, poly: row.poly, at: now };
-      if (!h.at24 && dateMs - now <= 24 * 3600000) h.at24 = { model: row.model, poly: row.poly, at: now };
+      if (!h.at24 && dateMs - now <= 24 * 3600000) h.at24 = { model: row.model, poly: row.poly, ask: m.ask, bid: m.bid, fee: m.fee, at: now };
       history[m.id] = h;
     }
   }

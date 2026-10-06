@@ -267,3 +267,19 @@ test("frais : grille Polymarket du marché", async () => {
   // frais activés sans grille : taux par défaut
   assert.deepEqual(feeParams({ feesEnabled: true }), { rate: 0.04, exp: 1 });
 });
+
+test("marché annulé : réglé 50/50", async () => {
+  const { payoutOf, isSplit } = await import("../site/js/normalize.js");
+  const split = { closed: true, prices: [0.5, 0.5] };
+  assert.ok(isSplit(split));
+  assert.equal(payoutOf(split, 1), 0.5);
+  assert.equal(payoutOf({ closed: true, prices: [1, 0] }, 1), 0);
+  assert.equal(payoutOf({ closed: false, prices: [0.5, 0.5] }, 0), null);
+});
+
+test("frais de secours d'après la catégorie", async () => {
+  const { feeForTags } = await import("../site/js/fees.js");
+  assert.deepEqual(feeForTags(["sports", "nfl"]), { rate: 0.03, exp: 1 });
+  assert.equal(feeForTags(["politics", "geopolitics"]), null);
+  assert.deepEqual(feeForTags(["crypto"]), { rate: 0.07, exp: 1 });
+});

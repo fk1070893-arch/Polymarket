@@ -2,7 +2,7 @@
 // direct, et si elle est injoignable (blocage FAI, CORS, panne), on se
 // rabat sur l'instantané data/events.json généré par la GitHub Action.
 
-import { normalizeEvents, normalizeMarket, winnerIndex } from "./normalize.js";
+import { isSplit, normalizeEvents, normalizeMarket, winnerIndex } from "./normalize.js";
 
 export const GAMMA = "https://gamma-api.polymarket.com";
 export const CLOB = "https://clob.polymarket.com";
@@ -94,6 +94,18 @@ export async function loadHistory(tokenId, interval = "1w") {
 }
 
 // Alertes de paris suspects, générées par la GitHub Action.
+// Carnet d'ordres d'une issue : offres de vente (moins chères d'abord) et
+// d'achat (plus chères d'abord)
+export async function loadBook(tokenId) {
+  const data = await fetchJSON(`${CLOB}/book?token_id=${encodeURIComponent(tokenId)}`, 5000);
+  const side = (list) =>
+    (list ?? []).map((o) => ({ price: Number(o.price), size: Number(o.size) })).filter((o) => o.price > 0 && o.price < 1 && o.size > 0);
+  return {
+    asks: side(data.asks).sort((a, b) => a.price - b.price),
+    bids: side(data.bids).sort((a, b) => b.price - a.price),
+  };
+}
+
 export async function loadAlerts() {
   const data = await fetchJSON(`data/alerts.json?t=${Date.now()}`, 15000);
   return { alerts: data.alerts ?? [], updatedAt: data.updatedAt };
@@ -126,7 +138,7 @@ export async function loadMarketStates(ids) {
       if (missing.length) rows = rows.concat(await query(missing, "&closed=true").catch(() => []));
       for (const r of rows) {
         const m = normalizeMarket(r);
-        states[m.id] = { p: m.prices, x: m.closed ? 1 : 0, w: winnerIndex(m) };
+        states[m.id] = { p: m.prices, x: m.closed ? 1 : 0, w: winnerIndex(m), s: isSplit(m) ? 1 : 0 };
       }
     }
   } catch {

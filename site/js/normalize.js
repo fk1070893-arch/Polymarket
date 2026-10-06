@@ -1,6 +1,7 @@
 // Transforme les objets bruts de l'API Gamma de Polymarket en un format
 // compact et stable. Utilisé à la fois par le navigateur (mode direct) et
 // par le script Node qui génère l'instantané (mode hors-ligne).
+import { feeParams } from "./fees.js";
 
 // Certains champs de l'API sont des tableaux encodés en chaîne JSON
 // (ex. outcomes: '["Yes","No"]'), d'autres sont déjà des tableaux.
@@ -34,6 +35,12 @@ export function normalizeMarket(m) {
     outcomes,
     prices,
     tokenId: tokens[0] ?? null,
+    tokens,
+    // Meilleurs prix acheteur / vendeur de la première issue, et grille de
+    // frais preneur (pour calculer le prix réellement payé)
+    bid: num(m.bestBid),
+    ask: num(m.bestAsk),
+    fee: feeParams(m),
     change24h: num(m.oneDayPriceChange),
     volume: num(m.volumeNum ?? m.volume),
     endDate: m.endDate ?? null,
@@ -79,6 +86,19 @@ export function winnerIndex(market) {
   if (!market.closed) return null;
   const i = market.prices.findIndex((p) => p >= 0.98);
   return i >= 0 ? i : null;
+}
+
+// Marché annulé ou ambigu, réglé « 50/50 » : chaque part rapporte 0,50 $
+export function isSplit(market) {
+  return market.closed === true && market.prices.length === 2 && market.prices.every((p) => Math.abs(p - 0.5) < 0.01);
+}
+
+// Ce que rapporte une part de l'issue `side` une fois le marché réglé
+// (1, 0 ou 0,5), null s'il n'est pas encore réglé
+export function payoutOf(market, side) {
+  const w = winnerIndex(market);
+  if (w != null) return w === side ? 1 : 0;
+  return isSplit(market) ? 0.5 : null;
 }
 
 export function normalizeEvents(rawEvents) {

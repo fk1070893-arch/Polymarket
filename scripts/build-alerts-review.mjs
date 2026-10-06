@@ -16,7 +16,7 @@
 //
 // Usage : node scripts/build-alerts-review.mjs (après build-alerts et build-copy)
 
-import { normalizeMarket, winnerIndex } from "../site/js/normalize.js";
+import { normalizeMarket, payoutOf } from "../site/js/normalize.js";
 import { loadState, mapLimit, readData, readState, writeState } from "./lib.mjs";
 import { bookDepth, feeParams, feePerShare, fetchMarketsByCondition } from "./paper.mjs";
 
@@ -58,6 +58,7 @@ function summarize(rows) {
     total: realized + unrealized,
     // Part des alertes au prix réellement obtenu par le test de copie
     realPrice: rows.filter((r) => r.priceSource === "copie").length,
+    bookPrice: rows.filter((r) => r.priceSource === "carnet").length,
   };
 }
 
@@ -84,7 +85,15 @@ try {
     const side = a.outcomeIndex;
     const cost = copied.get(a.id);
     const rate = feeParams(raw);
-    const entry = cost ?? (a.price > 0 ? Math.min(0.999, a.price + feePerShare(rate, a.price)) : a.price);
+    // Prix d'achat, du plus réaliste au moins réaliste : celui du test de
+    // copie, celui du carnet d'ordres quand le site a vu l'alerte (mise de
+    // 100 $), sinon celui du wallet suspect
+    const d = depth[a.id];
+    // (seulement si le carnet a été lu peu après l'alerte)
+    const bookAvg = d?.avg > 0 && d.avg < 1 && d.seenAt - a.ts * 1000 < 30 * 60000 ? d.avg : null;
+    const basePrice = cost != null ? null : bookAvg ?? (a.price > 0 ? a.price : null);
+    const entry = cost ?? (basePrice != null ? Math.min(0.999, basePrice + feePerShare(rate, basePrice)) : a.price);
+    const priceSource = cost != null ? "copie" : bookAvg != null ? "carnet" : "wallet";
     const base = {
       id: a.id,
       ts: a.ts,
@@ -100,12 +109,12 @@ try {
       tags: (a.tags ?? []).slice(0, 8),
       depth: depth[a.id] ? { ...depth[a.id], late: Math.round((depth[a.id].seenAt - a.ts * 1000) / 60000) } : null,
       entry,
-      priceSource: cost != null ? "copie" : "wallet",
+      priceSource,
     };
     if (!raw || !(entry > 0 && entry < 1)) return { ...base, status: "unknown", roi: 0 };
     const m = normalizeMarket(raw);
-    const w = winnerIndex({ ...m, closed: raw.closed === true });
-    if (w != null) return { ...base, status: w === side ? "won" : "lost", roi: w === side ? 1 / entry - 1 : -1 };
+    const pay = payoutOf({ ...m, closed: raw.closed === true }, side);
+    if (pay != null) return { ...base, status: pay === 1 ? "won" : "lost", split: pay === 0.5 || undefined, roi: pay / entry - 1 };
     const bid = sellPrice(raw, side) ?? m.prices[side] ?? null;
     if (bid == null) return { ...base, status: "unknown", roi: 0 };
     const sell = Math.max(0, bid - feePerShare(rate, bid));

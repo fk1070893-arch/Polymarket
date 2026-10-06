@@ -13,7 +13,7 @@ const GROUPS = [
 
 const filter = { min: 50, sort: "recent", group: "all", size: "all" };
 // Bilan « si on avait suivi toutes les alertes »
-const review = { window: "24h", stake: 10, min: 0, price: "all", size: "all", group: "all", buyable: false };
+const review = { window: "24h", stake: 10, min: 0, price: "all", size: "all", group: "all", buyable: false, realOnly: false };
 let bound = false;
 
 const $ = (id) => document.getElementById(id);
@@ -112,7 +112,8 @@ function matches(r, f, stake) {
     PRICES[f.price].test(r) &&
     (r.cash ?? 0) >= SIZES[f.size].min &&
     (f.group === "all" || groupOf(r) === f.group) &&
-    (!f.buyable || buyable(r, stake))
+    (!f.buyable || buyable(r, stake)) &&
+    (!f.realOnly || r.priceSource !== "wallet")
   );
 }
 
@@ -130,6 +131,7 @@ function sumUp(rows) {
     unrealized,
     total: realized + unrealized,
     realPrice: rows.filter((r) => r.priceSource === "copie").length,
+    bookPrice: rows.filter((r) => r.priceSource === "carnet").length,
     withDepth: rows.filter((r) => r.depth).length,
   };
 }
@@ -140,6 +142,7 @@ function filterLabel(f) {
   if (f.size !== "all") bits.push(`mise du wallet ≥ ${int.format(SIZES[f.size].min)} $`);
   if (f.group !== "all") bits.push(GROUPS.find((g) => g.key === f.group).label.toLowerCase());
   if (f.buyable) bits.push("achetable");
+  if (f.realOnly) bits.push("prix réels");
   return bits.join(" · ");
 }
 
@@ -154,7 +157,7 @@ function bestFilters(data, stake) {
     for (const price of Object.keys(PRICES))
       for (const size of Object.keys(SIZES))
         for (const group of GROUPS.map((g) => g.key)) {
-          const f = { min, price, size, group, buyable: review.buyable };
+          const f = { min, price, size, group, buyable: review.buyable, realOnly: review.realOnly };
           const sel = rows.filter((r) => matches(r, f, stake));
           if (sel.length < MIN_N) continue;
           const s = sumUp(sel);
@@ -216,6 +219,7 @@ function renderReview(ctx) {
         <label class="sort"><span>Mise du wallet</span>${selectBox("review-size", Object.entries(SIZES).map(([key, v]) => [key, key === "all" ? v.label : `≥ ${int.format(v.min)} $`]), review.size)}</label>
         <label class="sort"><span>Catégorie</span>${selectBox("review-group", GROUPS.map((g) => [g.key, g.label]), review.group)}</label>
         <label class="check"><input id="review-buyable" type="checkbox"${review.buyable ? " checked" : ""} /> Seulement si assez de parts à vendre pour ma mise</label>
+        <label class="check"><input id="review-real" type="checkbox"${review.realOnly ? " checked" : ""} /> Seulement les prix réellement disponibles (pas celui du wallet)</label>
       </div>
       ${
         w.n
@@ -257,8 +261,9 @@ function renderReview(ctx) {
               un filtre qui ne tient que sur une période ne vaut rien. Et la plupart de ces marchés ne sont pas terminés.</p>`
           : `<p class="muted small">Pas assez d'alertes (au moins ${MIN_N} par filtre) pour comparer des filtres.</p>`
       }
-      <p class="muted small">Prix d'achat : celui réellement obtenu par le test « copier les alertes » pour ${w.realPrice} alerte${w.realPrice > 1 ? "s" : ""} sur ${w.n}
-        (mise de 100 $, glissement et frais compris) ; pour les autres, celui payé par le wallet suspect plus les frais du marché, impossible à obtenir en le copiant (le résultat réel serait moins bon).
+      <p class="muted small">Prix d'achat, pour une mise de 100 $ avec glissement et frais : celui obtenu par le test « copier les alertes » (${w.realPrice} alerte${w.realPrice > 1 ? "s" : ""}),
+        sinon celui du carnet d'ordres lu par le site dans la demi-heure après l'alerte (${w.bookPrice}). Pour les ${w.n - w.realPrice - w.bookPrice} autres, celui payé par le wallet suspect plus les frais, impossible à obtenir en le copiant (résultat trop beau).
+        Marché annulé (réglé 50/50) : 0,50 $ par part.
         « Si revendu maintenant » utilise le meilleur prix d'achat actuel, frais déduits (sans le glissement à la revente).
         Parts à vendre : lues dans le carnet d'ordres quand le site voit l'alerte (${w.withDepth} alerte${w.withDepth > 1 ? "s" : ""} sur ${w.n} ; les plus anciennes n'en ont pas).
         Mis à jour ${timeAgo(new Date(data.updatedAt).getTime())}.</p>
@@ -345,6 +350,7 @@ function bind(ctx) {
     else if (t.id === "review-size") review.size = t.value;
     else if (t.id === "review-group") review.group = t.value;
     else if (t.id === "review-buyable") review.buyable = t.checked;
+    else if (t.id === "review-real") review.realOnly = t.checked;
     else return;
     renderReview(ctx);
   });

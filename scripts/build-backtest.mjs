@@ -23,6 +23,7 @@ import { modelProbability, parseCryptoQuestion } from "./crypto-model.mjs";
 import { isDeadline, parseUpDown, probUp } from "./niche-lib.mjs";
 import { getJSON, loadPrevious, mapLimit, writeData } from "./lib.mjs";
 import { feeParams, median, spreadOf } from "./paper.mjs";
+import { feeForTags } from "../site/js/fees.js";
 
 const DERIBIT = "https://www.deribit.com/api/v2/public";
 const DAY = 86400000;
@@ -102,7 +103,9 @@ function resolvedMarkets(rawEvents) {
         closedAt: parseTime(raw.closedTime),
         volume: m.volume,
         bucket: volumeBucket(m.volume),
-        fee: feeParams(raw),
+        // Frais d'aujourd'hui : ceux du marché s'il les indique, sinon ceux
+        // de sa catégorie (la plupart des marchés terminés datent d'avant les frais)
+        fee: raw.feeSchedule ? feeParams(raw) : feeForTags(tags),
       });
     }
   }
@@ -441,7 +444,7 @@ async function updownStudy(spreads) {
       const t0 = start + (u.minutes * 60000) / 2;
       const closedAt = parseTime(raw.closedTime);
       if (closedAt != null && closedAt <= t0) continue;
-      markets.push({ id: m.id, event: String(end), asset: u.asset, minutes: u.minutes, tokenId: String(tokens[up]), outcome: w === up ? 1 : 0, start, t0, end, volume: m.volume, bucket: volumeBucket(m.volume) });
+      markets.push({ id: m.id, event: String(end), asset: u.asset, minutes: u.minutes, tokenId: String(tokens[up]), outcome: w === up ? 1 : 0, start, t0, end, volume: m.volume, bucket: volumeBucket(m.volume), fee: raw.feeSchedule ? feeParams(raw) : feeForTags(["crypto"]) });
     }
   }
   const sample = markets.sort((a, b) => hashId(`${a.id}:ud`) - hashId(`${b.id}:ud`)).slice(0, 400);

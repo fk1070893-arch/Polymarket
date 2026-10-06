@@ -3,7 +3,7 @@
 // statistiques avec marge d'erreur.
 
 import { CLOB, GAMMA } from "../site/js/api.js";
-import { normalizeMarket, winnerIndex } from "../site/js/normalize.js";
+import { normalizeMarket, payoutOf } from "../site/js/normalize.js";
 import { bootstrapCI } from "./backtest-lib.mjs";
 import { feeParams, feePerShare } from "./fee-lib.mjs";
 import { getJSON } from "./lib.mjs";
@@ -90,7 +90,10 @@ export async function bookDepth(raw, side, limit = null) {
   const token = tokenIds(raw)[side];
   if (!token) return null;
   const asks = await fetchAsks(token);
-  return asks ? depthOf(asks, limit) : null;
+  if (!asks) return null;
+  // Prix moyen pour une mise de STAKE $ en descendant dans les offres
+  const walked = walkAsks(asks, STAKE);
+  return { ...depthOf(asks, limit), avg: walked ? Math.round(walked.avg * 10000) / 10000 : null, filled: walked ? Math.round(walked.spent) : 0 };
 }
 
 // Coût réel par part de 1 $ pour acheter l'issue `side` avec `stake` $ :
@@ -180,13 +183,15 @@ export async function settleBets(bets, now, { graceMs = 3600000, max = 300 } = {
     const raw = rows.get(String(b.marketId ?? b.id));
     if (!raw) continue;
     const m = normalizeMarket(raw);
-    const w = winnerIndex(m);
-    if (w == null) continue;
-    b.winner = w;
-    b.won = w === b.side;
+    const pay = payoutOf(m, b.side);
+    if (pay == null) continue;
+    b.winner = pay === 0.5 ? null : pay === 1 ? b.side : 1 - b.side;
+    b.won = pay === 1;
+    // Marché annulé, réglé 50/50 : 0,50 $ par part
+    if (pay === 0.5) b.split = true;
     // Sans prix d'achat connu, seul le gain au prix affiché est calculable
-    b.roi = b.cost != null ? roiAt(b.cost, b.won) : null;
-    if (b.mid != null) b.roiMid = roiAt(b.mid, b.won);
+    b.roi = b.cost != null ? pay / b.cost - 1 : null;
+    if (b.mid != null) b.roiMid = pay / b.mid - 1;
     b.finalVolume = Math.round(m.volume);
     b.resolvedAt = now;
     n++;

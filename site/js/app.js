@@ -1,5 +1,6 @@
 import { loadAlerts, loadBacktest, loadCrypto, loadData, loadEvents, loadStrategy, loadHistory, loadMarketStates } from "./api.js";
 import { mainMarket, yesPrice } from "./normalize.js";
+import { quoteBuy } from "./execution.js";
 import { lineChart, sparkline } from "./chart.js";
 import {
   TAG_SKIP,
@@ -351,6 +352,13 @@ const ctx = {
   state,
   toast,
   currentPrice,
+  // Marché d'une position (liste du site, sinon dernier état connu)
+  marketOf: (pos) => {
+    const hit = marketIndex.byId.get(pos.marketId);
+    if (hit) return hit.m;
+    const st = state.marketStates[pos.marketId];
+    return st?.p ? { prices: st.p, tokens: pos.tokens ?? null, fee: pos.feeParams ?? null } : null;
+  },
   marketIndex: () => marketIndex,
   openDetail: (id, opts) => openDetail(id, opts),
   rerender: () => renderView(),
@@ -436,6 +444,9 @@ function onRoute() {
 // ---------- Fiche détaillée ----------
 
 let detailToken = 0;
+// Dernier prix réel calculé dans le bloc « Ma prédiction »
+let quoteTicket = 0;
+let lastQuote = null;
 
 async function drawHistory(market, interval) {
   const chartBox = $("detail-chart");
@@ -596,11 +607,27 @@ function openDetail(id, { keepHash = false, marketId = null, pick = null } = {})
       sum.innerHTML = `<span class="down">Solde fictif insuffisant (${money.format(state.portfolio.cash)}).</span>`;
       return;
     }
-    const shares = amount / selected.prices[tradePick];
-    sum.innerHTML = `${shares.toLocaleString("fr-FR", { maximumFractionDigits: 1 })} parts à ${cents(selected.prices[tradePick])}. Si tu as raison : <b class="up">${money.format(
-      shares
-    )}</b> (${signedMoney(shares - amount)}). Sinon : <b class="down">${signedMoney(-amount)}</b>.`;
-    go.disabled = false;
+    // Prix réellement obtenu : lu dans le carnet d'ordres (quelques dixièmes de seconde)
+    const ticket = ++quoteTicket;
+    sum.innerHTML = `<span class="muted">Calcul du prix réel…</span>`;
+    quoteBuy(selected, tradePick, amount).then((q) => {
+      if (ticket !== quoteTicket) return;
+      lastQuote = q ? { ...q, amount, pick: tradePick, marketId: selected.id } : null;
+      if (!q) {
+        sum.textContent = "Ce marché n'a pas de prix exploitable.";
+        return;
+      }
+      const detail = [
+        q.source === "affiché" ? `prix affiché ${cents(q.price)} (carnet d'ordres indisponible)` : `${cents(q.price)} en moyenne chez les vendeurs`,
+        q.slippage > 0.0005 ? `dont ${cents(q.slippage)} de glissement` : "",
+        q.fee > 0.00005 ? `+ ${cents(q.fee)} de frais par part` : "sans frais",
+      ].filter(Boolean);
+      sum.innerHTML = `${q.shares.toLocaleString("fr-FR", { maximumFractionDigits: 1 })} parts à <b>${cents(q.cost)}</b> tout compris
+        <span class="muted small">(affiché ${cents(q.shown)} ; ${detail.join(", ")})</span>.
+        ${q.available != null ? `<br /><span class="down">Attention : seulement ${money.format(q.available)} à vendre dans le carnet, le reste serait plus cher.</span>` : ""}
+        <br />Si tu as raison : <b class="up">${money.format(q.shares)}</b> (${signedMoney(q.shares - amount)}). Sinon : <b class="down">${signedMoney(-amount)}</b>.`;
+      go.disabled = false;
+    });
   };
 
   const renderTrade = () => {
@@ -647,8 +674,9 @@ function openDetail(id, { keepHash = false, marketId = null, pick = null } = {})
     if (e.target.closest("#trade-go")) {
       try {
         const amount = parseFloat($("trade-amount").value);
-        const pos = buy(state.portfolio, { event: ev, market: selected, outcomeIndex: tradePick, amount });
-        toast(`Prédiction enregistrée : ${translateOutcome(pos.outcome)} à ${cents(pos.price)} pour ${money.format(pos.stake)}.`, "ok");
+        const q = lastQuote && lastQuote.amount === amount && lastQuote.pick === tradePick && lastQuote.marketId === selected.id ? lastQuote : null;
+        const pos = buy(state.portfolio, { event: ev, market: selected, outcomeIndex: tradePick, amount, quote: q });
+        toast(`Prédiction enregistrée : ${translateOutcome(pos.outcome)} à ${cents(pos.price)} tout compris pour ${money.format(pos.stake)}.`, "ok");
         tradePick = null;
         renderTrade();
       } catch (err) {
