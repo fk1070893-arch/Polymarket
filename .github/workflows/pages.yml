@@ -61,6 +61,12 @@ jobs:
         env:
           PAGES_URL: ${{ steps.pages.outputs.base_url }}
 
+      - name: Test en direct de la stratégie (favoris sport)
+        run: node scripts/build-strategy.mjs
+        continue-on-error: true
+        env:
+          PAGES_URL: ${{ steps.pages.outputs.base_url }}
+
       # Recalculé au plus une fois par jour (ou à la demande), sinon republié tel quel
       - name: Backtest sur les marchés terminés
         run: node scripts/build-backtest.mjs

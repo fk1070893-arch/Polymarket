@@ -42,6 +42,15 @@ L'onglet **Backtest** rejoue le passé, une fois par jour (ou à la demande : *A
 
 Tous les prix sont pris 24 h avant la fin (aucune information future), et chaque résultat est recalculé sur deux moitiés tirées au sort : un effet qui n'apparaît que dans une moitié est traité comme du hasard.
 
+### Ce que le backtest a trouvé (6 octobre 2026)
+
+- **Modèle crypto :** une fois le test rendu honnête (statistiques par événement, prix pris 24 h avant la fin *prévue*), il fait jeu égal avec Polymarket (Brier 0,033 contre 0,033) et ses signaux n'ont pas d'avantage prouvé. L'onglet Modèle crypto présente donc ses écarts comme une simple comparaison.
+- **Favoris en sport :** quand la première issue d'un marché sport est cotée 70-80 % la veille, elle ne gagne que 65 % du temps. Parier contre aurait rapporté +34 % par pari, marge [+6 % ; +62 %], positif dans les deux moitiés, et la même tendance apparaît de 60 % à 90 %.
+
+### Test en direct de la stratégie
+
+`scripts/build-strategy.mjs` applique la règle « contre les favoris sport » aux marchés en cours, à chaque passage de l'Action : marchés sport à deux issues, au moins 1 000 $ de volume, 24 h (± 4 h) avant la fin prévue, première issue cotée 60-90 % → 1 $ fictif sur l'autre issue. Les paris sont réglés à la clôture et affichés en haut de l'onglet Backtest. Ces marchés n'ont jamais été vus par le backtest : c'est la seule vraie preuve. Il faut 50 à 100 paris réglés avant de conclure.
+
 ### Portefeuille fictif
 
 Dans chaque fiche de marché, le bloc **Ma prédiction** permet d'acheter des parts avec 1 000 $ fictifs, au prix du marché. Une part vaut 1 $ si l'issue gagne, 0 sinon. L'onglet **Mon portefeuille** suit la valeur des prédictions, les règle automatiquement quand le marché se termine, et compare ton taux de réussite à celui attendu par le marché (« est-ce que tu bats le marché ? »). Les données restent dans le navigateur (export / import en JSON).
@@ -55,13 +64,14 @@ navigateur ──► API Polymarket (direct)          ✔ badge « En direct »
                            (généré toutes les 15 min par la GitHub Action)
 ```
 
-La GitHub Action génère cinq fichiers à chaque passage :
+La GitHub Action génère six fichiers à chaque passage :
 
 - `data/events.json` : marchés ouverts et historiques 7 jours ;
 - `data/markets.json` : dernier prix et résultat final des marchés déjà vus (pour régler le portefeuille) ;
 - `data/alerts.json` : paris suspects des 7 derniers jours ;
 - `data/crypto.json` : modèle crypto et historique de ses prédictions ;
-- `data/backtest.json` : résultats du backtest (recalculés une fois par jour).
+- `data/backtest.json` : résultats du backtest (recalculés une fois par jour) ;
+- `data/strategy.json` : paris fictifs du test en direct de la stratégie.
 
 Comme une Action n'a pas de mémoire, chaque passage relit l'état précédent depuis le site publié.
 
@@ -84,6 +94,7 @@ npm run snapshot   # récupère les marchés (nécessite l'accès à l'API)
 npm run alerts     # détecte les paris suspects
 npm run crypto     # modèle crypto
 npm run backtest   # backtest (BACKTEST_FORCE=true pour forcer)
+npm run strategy   # test en direct de la stratégie
 npm test           # tests unitaires
 npm start          # sert le dossier site/ sur http://localhost:3000
 ```
@@ -107,7 +118,8 @@ npm start          # sert le dossier site/ sur http://localhost:3000
 | `site/js/view-crypto.js` | Onglet Modèle crypto |
 | `scripts/backtest-lib.mjs` | Calculs du backtest (+ tests) |
 | `scripts/build-backtest.mjs` | Backtest → `backtest.json` |
-| `site/js/view-backtest.js` | Onglet Backtest |
+| `site/js/view-backtest.js` | Onglet Backtest (et test en direct) |
+| `scripts/build-strategy.mjs` | Test en direct de la stratégie → `strategy.json` |
 | `.github/workflows/pages.yml` | Instantané + déploiement toutes les 15 min |
 
 Les probabilités sont les prix du marché, pas des certitudes. Données publiques de Polymarket, à titre informatif uniquement.

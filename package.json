@@ -8,6 +8,7 @@
     "alerts": "node scripts/build-alerts.mjs",
     "crypto": "node scripts/build-crypto.mjs",
     "backtest": "node scripts/build-backtest.mjs",
+    "strategy": "node scripts/build-strategy.mjs",
     "test": "node --test scripts/*.test.mjs",
     "start": "npx --yes serve site"
   }

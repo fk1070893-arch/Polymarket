@@ -1,4 +1,4 @@
-import { loadAlerts, loadBacktest, loadCrypto, loadEvents, loadHistory, loadMarketStates } from "./api.js";
+import { loadAlerts, loadBacktest, loadCrypto, loadEvents, loadStrategy, loadHistory, loadMarketStates } from "./api.js";
 import { mainMarket, yesPrice } from "./normalize.js";
 import { lineChart, sparkline } from "./chart.js";
 import {
@@ -42,6 +42,7 @@ const state = {
   alertsUpdatedAt: null,
   alertsError: false,
   portfolio: loadPortfolio(),
+  strategy: null, // test en direct de la stratégie (null = pas encore chargé, false = indisponible)
   backtest: null, // résultats du backtest (null = pas encore chargé, false = indisponible)
   crypto: null, // modèle crypto (null = pas encore chargé, false = indisponible)
   marketStates: {}, // prix / résultats des marchés hors liste (portefeuille)
@@ -423,7 +424,7 @@ function tradePanel(ev, market, pick) {
   const model = cryptoForMarket(state, market.id);
   const modelLine = model
     ? `<p class="model-hint">Modèle options Deribit : <b>${pct(model.model)}</b> pour « Oui » (Polymarket : ${pct(yesPrice(market))}).
-        <a href="#crypto">Voir le modèle crypto</a></p>`
+        Sur le passé, ce modèle n'a pas fait mieux que Polymarket. <a href="#crypto">Voir le modèle crypto</a></p>`
     : "";
   return `
     <div class="trade-head">
@@ -740,6 +741,14 @@ async function refreshBacktest() {
   }
 }
 
+async function refreshStrategy() {
+  try {
+    state.strategy = await loadStrategy();
+  } catch {
+    state.strategy ??= false;
+  }
+}
+
 async function refreshCrypto() {
   try {
     state.crypto = await loadCrypto();
@@ -787,6 +796,7 @@ async function refresh({ initial = false } = {}) {
       refreshAlerts(),
       refreshCrypto(),
       refreshBacktest(),
+      refreshStrategy(),
     ]);
     Object.assign(state, data);
     mergeCryptoEvents();

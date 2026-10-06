@@ -1667,6 +1667,29 @@ button {
 
 /* ---------- Backtest ---------- */
 
+.bt-banner {
+  margin: 16px 0 0;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  font-size: 14px;
+  border: 1px solid var(--border);
+}
+
+.bt-banner.warn {
+  background: rgba(245, 165, 36, 0.12);
+  border-color: rgba(245, 165, 36, 0.4);
+}
+
+.bt-banner.ok {
+  background: var(--yes-soft);
+}
+
+.bt-banner a {
+  color: var(--accent);
+  font-weight: 600;
+  margin-left: 4px;
+}
+
 #view-backtest h2 {
   font-size: 17px;
   margin: 14px 0 10px;
@@ -1687,6 +1710,50 @@ button {
   font-size: 12.5px;
   color: var(--muted);
   margin-right: 2px;
+}
+
+.verdict.live {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.strat-bets {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.strat-bet {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 13.5px;
+}
+
+.strat-q {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.strat-q b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .strat-bet {
+    grid-template-columns: 1fr auto;
+  }
+
+  .strat-q {
+    grid-column: 1 / -1;
+  }
 }
 
 .calib-layout {

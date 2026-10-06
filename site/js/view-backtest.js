@@ -1,6 +1,6 @@
 // Onglet « Backtest » : résultats de scripts/build-backtest.mjs
 
-import { esc, pct, timeAgo } from "./format.js";
+import { cents, duration, esc, pct, timeAgo } from "./format.js";
 
 const GROUP_LABELS = { all: "Tout", politique: "Politique", crypto: "Crypto", sport: "Sport", eco: "Économie / Tech", autre: "Autres" };
 const KIND_LABELS = { above: "Au-dessus de X à une date", below: "Sous X à une date", between: "Entre A et B à une date", touch: "Atteint / chute à X" };
@@ -280,16 +280,78 @@ function bind(ctx) {
   });
 }
 
+// Test en direct de la stratégie « contre les favoris sport »
+function strategySection(st) {
+  if (st === null) return `<section class="verdict live"><h2>Test en direct</h2><p class="muted">Chargement…</p></section>`;
+  if (!st || !st.summary) {
+    return `<section class="verdict live"><h2>Test en direct : contre les favoris sport</h2>
+      <p>Le test démarre au prochain passage de la GitHub Action (toutes les 15 minutes).</p></section>`;
+  }
+  const s = st.summary;
+  const sp = (v) => `${v > 0 ? "+" : ""}${Math.round(v * 100)} %`;
+  const verdict = (() => {
+    if (!s.n) return `<p>Aucun pari réglé pour l'instant. Les premiers résultats arrivent environ 24 h après les premiers paris.</p>`;
+    const sure = s.ci && (s.ci[0] > 0 || s.ci[1] < 0);
+    const line =
+      s.n < 50
+        ? `<b>Trop tôt pour conclure</b> (${s.n} pari${s.n > 1 ? "s" : ""} réglé${s.n > 1 ? "s" : ""}) : il en faut au moins 50 à 100.`
+        : s.ci && s.ci[0] > 0
+          ? `<b class="up">La stratégie gagne aussi sur des marchés que le backtest n'a jamais vus.</b>`
+          : s.ci && s.ci[1] < 0
+            ? `<b class="down">La stratégie perd de l'argent en direct : le biais trouvé dans le passé ne tient pas.</b>`
+            : `<b>Pas encore de conclusion : le résultat peut encore s'expliquer par le hasard.</b>`;
+    return `<p>Les issues pariées ont gagné <b>${pct(s.winRate)}</b> du temps (${s.wins}/${s.n}) ; leur prix annonçait <b>${pct(s.expectedWinRate)}</b>.
+      Gain moyen : <b class="${s.roi >= 0 ? "up" : "down"}">${sp(s.roi)}</b> par pari${
+        s.ci ? `, marge d'erreur <span class="${sure ? "" : "muted"}">[${sp(s.ci[0])} ; ${sp(s.ci[1])}]</span>` : ""
+      } (${s.pnl >= 0 ? "+" : "−"}${Math.abs(s.pnl).toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $ pour ${s.n} $ misés).</p><p>${line}</p>`;
+  })();
+  const recent = (st.bets ?? []).slice(0, 12);
+  return `
+    <section class="verdict live">
+      <h2>Test en direct : contre les favoris sport</h2>
+      <p class="muted small">Démarré ${timeAgo(new Date(st.startedAt).getTime())} · règle : ${esc(st.rule?.description ?? "")}</p>
+      <div class="pf-stats">
+        <div class="stat"><span>Paris réglés</span><strong>${s.n ?? 0}</strong><em class="muted">${s.events ?? 0} événement${(s.events ?? 0) > 1 ? "s" : ""}</em></div>
+        <div class="stat"><span>En attente</span><strong>${s.pending ?? 0}</strong></div>
+        <div class="stat"><span>Gain / pari</span><strong class="${(s.roi ?? 0) >= 0 ? "up" : "down"}">${s.n ? sp(s.roi) : "—"}</strong></div>
+      </div>
+      ${verdict}
+      ${
+        recent.length
+          ? `<h3>Derniers paris fictifs</h3><div class="strat-bets">${recent
+              .map((b) => {
+                const status =
+                  b.outcome == null
+                    ? `<span class="muted">${b.end > Date.now() ? `fin dans ${duration((b.end - Date.now()) / 1000)}` : "résultat en attente"}</span>`
+                    : b.outcome === 0
+                      ? `<span class="up"><b>Gagné ${sp(b.roi)}</b></span>`
+                      : `<span class="down"><b>Perdu</b></span>`;
+                return `<div class="strat-bet">
+                  <span class="strat-q"><b>${esc(b.eventTitle || b.question)}</b>
+                    <span class="muted small">${b.question !== b.eventTitle ? `${esc(b.question)} · ` : ""}favori ${esc(b.favorite)} à ${pct(b.p)}</span></span>
+                  <span class="strat-pick">1 $ sur <b>${esc(b.bet)}</b> à ${cents(1 - b.p)}</span>
+                  ${status}
+                </div>`;
+              })
+              .join("")}</div>`
+          : ""
+      }
+    </section>`;
+}
+
 export function renderBacktest(ctx) {
   bind(ctx);
   const data = ctx.state.backtest;
   const body = $("backtest-body");
+  const live = strategySection(ctx.state.strategy);
   if (data === null) {
-    body.innerHTML = `<p class="empty">Chargement du backtest…</p>`;
+    body.innerHTML = live + `<p class="empty">Chargement du backtest…</p>`;
     return;
   }
   if (!data || !data.calibration) {
-    body.innerHTML = `<p class="empty">Le backtest n'est pas encore disponible. Il est calculé une fois par jour par la GitHub Action (quelques minutes de calcul) : réessaie un peu plus tard.</p>`;
+    body.innerHTML =
+      live +
+      `<p class="empty">Le backtest n'est pas encore disponible. Il est calculé une fois par jour par la GitHub Action (quelques minutes de calcul) : réessaie un peu plus tard.</p>`;
     return;
   }
 
@@ -303,7 +365,9 @@ export function renderBacktest(ctx) {
   const found = findings(cur.bins);
 
   body.innerHTML = `
-    <p class="muted small">Calculé ${timeAgo(new Date(data.updatedAt).getTime())} · prix pris ${data.lookbackHours} h avant la fin de chaque marché${
+    ${live}
+
+    <p class="muted small">Backtest calculé ${timeAgo(new Date(data.updatedAt).getTime())} · prix pris ${data.lookbackHours} h avant la fin de chaque marché${
       data.partial ? " · calcul interrompu (limite de temps), résultats partiels" : ""
     }.</p>
 

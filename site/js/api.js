@@ -144,3 +144,8 @@ export async function loadCrypto() {
 export async function loadBacktest() {
   return fetchJSON(`data/backtest.json?t=${Date.now()}`, 15000);
 }
+
+// Test en direct de la stratégie « contre les favoris sport ».
+export async function loadStrategy() {
+  return fetchJSON(`data/strategy.json?t=${Date.now()}`, 15000);
+}

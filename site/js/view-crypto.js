@@ -3,7 +3,7 @@
 
 import { duration, esc, money, pct, shortDateFmt, timeAgo } from "./format.js";
 
-const filter = { asset: "all", min: 0.05, sort: "edge" };
+const filter = { asset: "all", min: 0, sort: "edge" };
 let bound = false;
 
 const $ = (id) => document.getElementById(id);
@@ -40,11 +40,23 @@ function describe(row, spot) {
   }
 }
 
-function signal(edge, poly, min) {
-  if (poly < 0.03 || poly > 0.97 || Math.abs(edge) < min) return "";
-  return edge > 0
-    ? `<span class="sig yes">« Oui » sous-coté</span>`
-    : `<span class="sig no">« Non » sous-coté</span>`;
+// Verdict du backtest (un pari par événement, marge d'erreur à 90 %) :
+// tant que le modèle n'a pas prouvé qu'il bat Polymarket, ses écarts sont
+// présentés comme une simple comparaison, pas comme des signaux.
+function backtestBanner(bt) {
+  const t5 = bt?.crypto?.thresholds?.["0.05"];
+  if (!t5) return "";
+  const ci = t5.all.ci;
+  const sp = (v) => `${v > 0 ? "+" : ""}${Math.round(v * 100)} %`;
+  const proven = ci && ci[0] > 0 && t5.A.roi > 0 && t5.B.roi > 0;
+  return `
+    <section class="bt-banner ${proven ? "ok" : "warn"}">
+      <b>${proven ? "Le backtest donne un avantage au modèle." : "Le backtest ne montre pas d'avantage au modèle."}</b>
+      Rejoué sur ${bt.crypto.events ?? "?"} événements passés, un seul pari par événement, en suivant les écarts de 5 pts ou plus :
+      ${sp(t5.all.roi)} par pari, marge d'erreur ${ci ? `[${sp(ci[0])} ; ${sp(ci[1])}]` : "inconnue"}.
+      ${proven ? "" : "Les écarts ci-dessous sont une comparaison, pas des conseils de pari."}
+      <a href="#backtest">Voir le backtest</a>
+    </section>`;
 }
 
 function trackRecord(rec) {
@@ -141,8 +153,10 @@ export function renderCrypto(ctx) {
       <div class="stat"><span>Mis à jour</span><strong>${timeAgo(new Date(data.updatedAt).getTime())}</strong><em class="muted">${data.markets.length} marchés analysés</em></div>
     </div>
 
+    ${backtestBanner(ctx.state.backtest)}
+
     <section class="verdict">
-      <h2>Est-ce que le modèle a raison ?</h2>
+      <h2>Suivi en direct : est-ce que le modèle a raison ?</h2>
       ${trackRecord(data.record)}
     </section>
 
@@ -185,13 +199,11 @@ export function renderCrypto(ctx) {
               .map((r) => {
                 const spot = data.assets?.[r.asset]?.spot ?? 0;
                 const pts = Math.round(r.edge * 100);
-                const pick = Math.abs(r.edge) >= (data.signal ?? 0.05) && r.poly >= 0.03 && r.poly <= 0.97 ? (r.edge > 0 ? 0 : 1) : "";
                 return `
-                <button type="button" class="crypto-row" data-crypto-market="${esc(r.marketId)}" data-event="${esc(r.eventId)}" data-pick="${pick}">
+                <button type="button" class="crypto-row" data-crypto-market="${esc(r.marketId)}" data-event="${esc(r.eventId)}" data-pick="">
                   <span class="cr-name">
                     <b>${esc(describe(r, spot))}</b>
                     <span class="muted small">${esc(r.eventTitle)} · ${duration((new Date(r.date) - Date.now()) / 1000)} restants · vol. ${Math.round(r.sigma * 100)} %</span>
-                    ${signal(r.edge, r.poly, Math.max(filter.min, data.signal ?? 0.05))}
                   </span>
                   <span class="cr-num"><em>Polymarket</em>${pct(r.poly)}</span>
                   <span class="cr-num"><em>Modèle</em>${pct(r.model)}</span>
@@ -204,13 +216,13 @@ export function renderCrypto(ctx) {
     }
 
     <section class="caveats">
-      <h2>À savoir avant de suivre un signal</h2>
+      <h2>À savoir</h2>
       <ul>
         <li><b>Le modèle n'est pas magique.</b> Il suppose des variations de prix « normales » ; les krachs et les envolées soudaines sont plus fréquents dans la réalité.</li>
         <li><b>Les options sont « neutres au risque ».</b> La probabilité Deribit intègre une prime de risque : elle surestime un peu les mouvements extrêmes.</li>
         <li><b>La référence diffère.</b> Polymarket se base en général sur le prix Binance à une heure précise, Deribit sur son propre indice : quelques dizaines de dollars d'écart possibles.</li>
         <li><b>Un écart sur un petit marché</b> (peu de liquidité) peut juste venir d'un manque d'acheteurs, pas d'une erreur.</li>
-        <li>Clique sur un marché pour ouvrir sa fiche : la prédiction fictive est présélectionnée dans le sens du signal.</li>
+        <li><b>Rejoué sur le passé, le modèle fait jeu égal avec Polymarket.</b> Un écart ne veut donc pas dire que Polymarket se trompe. Le suivi en direct ci-dessus dira, avec le temps, si ça change.</li>
       </ul>
     </section>`;
 }
