@@ -30,22 +30,52 @@ const RULE = {
     "Marchés de 5 à 7 h, prévus pour durer au moins 3 jours, dont le « Oui » est affiché entre 40 et 60 % : 1 $ fictif sur « Non » au vrai prix vendeur du carnet d'ordres. Résultat compté sur les marchés finis avec au moins 1 000 $ de volume, comme dans le backtest.",
 };
 
+const ageOf = (raw, now) => now - (parseTime(raw.startDate) ?? parseTime(raw.createdAt) ?? now);
+
+// Marchés bruts d'une page Gamma ; les événements sont dépliés en marchés
+// (en leur rattachant l'événement, comme le fait /markets)
+async function page(kind, params, offset) {
+  const qs = new URLSearchParams({ active: "true", closed: "false", limit: "100", offset: String(offset), ...params });
+  const rows = await getJSON(`${GAMMA}/${kind}?${qs}`);
+  const markets = kind === "events" ? rows.flatMap((ev) => (ev.markets ?? []).map((m) => ({ ...m, events: [ev] }))) : rows;
+  return { markets, n: rows.length };
+}
+
+// L'API ne documente pas bien le tri par date de création : on essaie
+// plusieurs façons et on garde la première qui renvoie des marchés récents.
+const QUERIES = [
+  ["markets", { order: "createdAt", ascending: "false" }],
+  ["markets", { order: "startDate", ascending: "false" }],
+  ["events", { order: "createdAt", ascending: "false" }],
+  ["events", { order: "startDate", ascending: "false" }],
+];
+
 async function youngMarkets(now) {
-  const out = new Map();
-  for (let page = 0; page < 5; page++) {
-    const params = new URLSearchParams({
-      active: "true",
-      closed: "false",
-      start_date_min: new Date(now - AGE[1] - HOUR).toISOString(),
-      start_date_max: new Date(now - AGE[0] + HOUR).toISOString(),
-      limit: "100",
-      offset: String(page * 100),
+  for (const [kind, params] of QUERIES) {
+    const label = `${kind} trié par ${params.order}`;
+    const first = await page(kind, params, 0).catch((err) => {
+      console.log(`  ${label} : erreur (${err.message})`);
+      return null;
     });
-    const batch = await getJSON(`${GAMMA}/markets?${params}`);
-    for (const r of batch) out.set(String(r.id), r);
-    if (batch.length < 100) break;
+    if (!first?.markets.length) continue;
+    const youngest = Math.min(...first.markets.map((r) => ageOf(r, now)));
+    console.log(`  ${label} : marché le plus récent ouvert il y a ${Math.round(youngest / 60000)} min`);
+    if (youngest > AGE[1]) continue;
+    // Tri du plus récent au plus ancien : on s'arrête une fois passé 7 h
+    const out = new Map();
+    let cur = first;
+    for (let offset = 0; offset < 1000; ) {
+      for (const r of cur.markets) out.set(String(r.id), r);
+      const oldest = Math.max(...cur.markets.map((r) => ageOf(r, now)));
+      if (cur.n < 100 || oldest > AGE[1] + HOUR) break;
+      offset += 100;
+      cur = await page(kind, params, offset);
+    }
+    console.log(`  → ${label} retenu, ${out.size} marchés lus`);
+    return [...out.values()];
   }
-  return [...out.values()];
+  console.log("Aucune requête ne renvoie de marchés récents");
+  return [];
 }
 
 async function main(prev) {
