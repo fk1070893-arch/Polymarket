@@ -12,6 +12,8 @@ const GROUPS = [
 ];
 
 const filter = { min: 50, sort: "recent", group: "all", size: "all" };
+// Bilan « si on avait suivi toutes les alertes »
+const review = { window: "24h", stake: 10 };
 let bound = false;
 
 const $ = (id) => document.getElementById(id);
@@ -51,6 +53,67 @@ function marketLine(a) {
     <span class="muted small">Liquidité ${k(a.marketLiquidity)} · volume total ${k(a.marketVolume)}</span></p>`;
 }
 
+// Résultat de l'alerte si on l'avait suivie (voir le bilan en haut de l'onglet)
+function reviewLine(state, a) {
+  const r = state.alertsReview?.rows?.find((x) => x.id === a.id);
+  if (!r || r.status === "unknown") return "";
+  const sp = `${r.roi >= 0 ? "+" : ""}${Math.round(r.roi * 100)} %`;
+  const txt = r.status === "won" ? `Gagné : ${sp}` : r.status === "lost" ? "Perdu" : `En cours : ${sp} si revendu maintenant`;
+  return ` <span class="flag ${r.roi >= 0 ? "good" : "alert"}">${txt}</span>`;
+}
+
+const money2 = new Intl.NumberFormat("fr-FR", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+const signedUsd = (v) => `${v >= 0 ? "+" : "−"}${money2.format(Math.abs(v))}`;
+
+function renderReview(ctx) {
+  const box = $("alerts-review");
+  const data = ctx.state.alertsReview;
+  if (!data?.windows) {
+    box.innerHTML = "";
+    return;
+  }
+  const w = data.windows[review.window];
+  const k = review.stake;
+  const pctOf = (v) => (w.n ? `${v >= 0 ? "+" : ""}${Math.round((v / w.n) * 100)} %` : "—");
+  box.innerHTML = `
+    <section class="verdict live">
+      <h2>Si on avait suivi toutes les alertes</h2>
+      <div class="review-controls">
+        <nav class="chips">
+          ${[["24h", "Dernières 24 h"], ["7j", "7 derniers jours"]]
+            .map(([key, l]) => `<button type="button" class="chip${key === review.window ? " active" : ""}" data-review-window="${key}" aria-pressed="${key === review.window}">${l}</button>`)
+            .join("")}
+        </nav>
+        <label class="sort"><span>Mise par alerte</span>
+          <span class="amount-input small"><input id="review-stake" type="number" min="1" step="1" value="${k}" inputmode="decimal" /><span>$</span></span></label>
+      </div>
+      ${
+        w.n
+          ? `<div class="pf-stats review-stats">
+              <div class="stat"><span>Misé</span><strong>${money2.format(w.n * k)}</strong><em class="muted">${w.n} alertes</em></div>
+              <div class="stat"><span>Gagné / perdu (terminées)</span><strong class="${w.realized >= 0 ? "up" : "down"}">${signedUsd(w.realized * k)}</strong><em class="muted">${w.resolved} terminées, ${w.won} gagnées</em></div>
+              <div class="stat"><span>En cours, si revendu maintenant</span><strong class="${w.unrealized >= 0 ? "up" : "down"}">${signedUsd(w.unrealized * k)}</strong><em class="muted">${w.open} en cours</em></div>
+              <div class="stat big"><span>Total</span><strong class="${w.total >= 0 ? "up" : "down"}">${signedUsd(w.total * k)}</strong><em class="${w.total >= 0 ? "up" : "down"}">${pctOf(w.total)} de la mise</em></div>
+            </div>
+            <div class="table-wrap"><table class="bt-table">
+              <thead><tr><th>Alertes</th><th class="num">Nombre</th><th class="num">Terminées (gagnées)</th><th class="num">Total</th></tr></thead>
+              <tbody>${w.byScore
+                .filter((b) => b.n)
+                .map(
+                  (b) => `<tr><td>${b.label}</td><td class="num">${b.n}</td><td class="num">${b.resolved} (${b.won})</td>
+                    <td class="num ${b.total >= 0 ? "up" : "down"}">${signedUsd(b.total * k)} <span class="ci">${b.total >= 0 ? "+" : ""}${Math.round((b.total / b.n) * 100)} %</span></td></tr>`
+                )
+                .join("")}</tbody>
+            </table></div>
+            <p class="muted small">Prix d'achat : celui réellement obtenu par le test « copier les alertes » pour ${w.realPrice} alerte${w.realPrice > 1 ? "s" : ""} sur ${w.n} ;
+              pour les autres, celui payé par le wallet suspect, impossible à obtenir en le copiant (le résultat réel serait moins bon).
+              « Si revendu maintenant » utilise le meilleur prix d'achat actuel. La plupart des marchés ne sont pas encore terminés : ce total bouge à chaque actualisation.
+              Mis à jour ${timeAgo(new Date(data.updatedAt).getTime())}.</p>`
+          : `<p>Aucune alerte sur cette période.</p>`
+      }
+    </section>`;
+}
+
 function moveLine(a, now) {
   if (now == null) return `<span class="muted">Marché clôturé ou hors liste</span>`;
   return `Aujourd'hui : <b>${pct(now)}</b> ${changeBadge(now - a.price) || '<span class="chg">=</span>'}`;
@@ -70,7 +133,7 @@ function alertCard(ctx, a) {
           A misé <b>${usd0.format(a.cash)}</b> sur « <b>${esc(translateOutcome(a.outcome))}</b> » à <b>${pct(a.price)}</b>
           <span class="muted">· ${timeAgo(a.ts * 1000)}</span>
         </p>
-        <p class="alert-move">${moveLine(a, now)}</p>
+        <p class="alert-move">${moveLine(a, now)}${reviewLine(ctx.state, a)}</p>
         ${marketLine(a)}
         <div class="reasons">${a.reasons.map((r) => `<span>${esc(r)}</span>`).join("")}</div>
         <footer>
@@ -110,6 +173,18 @@ function bind(ctx) {
     filter.size = e.target.value;
     renderAlerts(ctx);
   });
+  $("alerts-review").addEventListener("click", (e) => {
+    const chip = e.target.closest("[data-review-window]");
+    if (!chip) return;
+    review.window = chip.dataset.reviewWindow;
+    renderReview(ctx);
+  });
+  $("alerts-review").addEventListener("change", (e) => {
+    if (e.target.id !== "review-stake") return;
+    const v = Number(e.target.value);
+    if (v > 0) review.stake = v;
+    renderReview(ctx);
+  });
   $("alerts-sort").addEventListener("change", (e) => {
     filter.sort = e.target.value;
     renderAlerts(ctx);
@@ -133,6 +208,7 @@ export function renderAlerts(ctx) {
   bind(ctx);
   const { state } = ctx;
   const list = $("alerts-list");
+  renderReview(ctx);
 
   const all = state.alerts ?? [];
   const counts = Object.fromEntries(GROUPS.map((g) => [g.key, 0]));

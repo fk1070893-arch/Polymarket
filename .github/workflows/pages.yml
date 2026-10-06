@@ -113,6 +113,11 @@ jobs:
         env:
           PAGES_URL: ${{ steps.pages.outputs.base_url }}
 
+      - name: Bilan des alertes (si on les avait toutes suivies)
+        run: node scripts/build-alerts-review.mjs
+        continue-on-error: true
+        timeout-minutes: 2
+
       - name: Test en direct - marchés tout neufs
         run: node scripts/build-fresh.mjs
         continue-on-error: true

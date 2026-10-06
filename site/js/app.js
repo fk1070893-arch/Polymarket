@@ -59,6 +59,7 @@ const state = {
   alerts: null, // null = pas encore chargées
   alertsUpdatedAt: null,
   alertsError: false,
+  alertsReview: null, // bilan des alertes suivies
   portfolio: loadPortfolio(),
   strategy: null, // test en direct de la stratégie (null = pas encore chargé, false = indisponible)
   copy: null, // test en direct : copier les alertes
@@ -846,7 +847,8 @@ function mergeCryptoEvents() {
 
 async function refreshAlerts() {
   try {
-    const { alerts, updatedAt } = await loadAlerts();
+    const [{ alerts, updatedAt }, review] = await Promise.all([loadAlerts(), loadData("alerts-review").catch(() => null)]);
+    state.alertsReview = review ?? false;
     state.alerts = alerts;
     state.alertsUpdatedAt = updatedAt;
     state.alertsError = false;

@@ -2341,3 +2341,25 @@ button {
 .cal-more {
   margin-top: 8px;
 }
+
+.review-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.review-stats {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.amount-input.small input {
+  width: 80px;
+}
+
+@media (max-width: 640px) {
+  .review-stats {
+    grid-template-columns: 1fr 1fr;
+  }
+}

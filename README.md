@@ -122,6 +122,7 @@ Le site est ensuite disponible sur `https://<ton-pseudo>.github.io/Polymarket/` 
 
 ## Autres onglets
 
+- **Alertes, « Si on avait suivi toutes les alertes »** (`scripts/build-alerts-review.mjs`) : sur les dernières 24 h ou les 7 derniers jours, ce qu'aurait donné une mise fixe sur chaque alerte (réglable) : gain réel sur les marchés terminés, valeur si on revendait maintenant pour les autres, détail par score. Prix d'achat : celui obtenu par le test de copie quand il existe, sinon celui du wallet suspect (cas le plus favorable).
 - **Radar** : tous les signaux du moment sur une seule page (anomalies de prix, favoris sport à bon prix, écarts avec les bookmakers et Kalshi, paris suspects, marchés neufs à vrai prix, modèle crypto), chacun avec le statut de sa stratégie d'après les tests en direct.
 - **Fiche d'un marché** : un bloc « Ce que le site sait sur ce marché » réunit les cotes des bookmakers, le prix Kalshi, le modèle crypto, une éventuelle anomalie et les paris fictifs en cours des tests.
 - **Calendrier** (`scripts/build-calendar.mjs`) : les événements les plus suivis qui se terminent dans les 7 jours, et les résultats des dernières 48 h.

@@ -18,6 +18,7 @@
     "universe": "node scripts/build-universe.mjs",
     "calendar": "node scripts/build-calendar.mjs",
     "leaders": "node scripts/build-leaders.mjs",
+    "alerts-review": "node scripts/build-alerts-review.mjs",
     "test": "node --test scripts/*.test.mjs",
     "start": "npx --yes serve site"
   }
