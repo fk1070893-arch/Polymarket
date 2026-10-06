@@ -133,6 +133,8 @@ function metaculusProb(post) {
   const paths = [
     q?.aggregations?.recency_weighted?.latest?.centers?.[0],
     q?.aggregations?.recency_weighted?.latest?.forecast_values?.[1],
+    q?.aggregations?.unweighted?.latest?.centers?.[0],
+    q?.aggregations?.metaculus_prediction?.latest?.centers?.[0],
     q?.community_prediction?.full?.q2,
     post?.community_prediction?.full?.q2,
   ];
@@ -142,18 +144,21 @@ function metaculusProb(post) {
 
 async function metaculus() {
   const urls = [
-    (o) => `https://www.metaculus.com/api/posts/?statuses=open&forecast_type=binary&order_by=-hotness&limit=100&offset=${o}`,
+    // with_cp : sans lui, la nouvelle API ne renvoie pas la prévision de la communauté
+    (o) => `https://www.metaculus.com/api/posts/?statuses=open&forecast_type=binary&with_cp=true&order_by=-hotness&limit=100&offset=${o}`,
     (o) => `https://www.metaculus.com/api2/questions/?status=open&type=binary&order_by=-activity&limit=100&offset=${o}`,
   ];
   for (const url of urls) {
     const out = [];
     let error = null;
+    let read = 0;
     for (let o = 0; o < 500; o += 100) {
       const data = await metaculusGet(url(o)).catch((err) => {
         error = err.message;
         return null;
       });
       const rows = data?.results ?? [];
+      read += rows.length;
       for (const post of rows) {
         const p = metaculusProb(post);
         const q = post.question ?? post;
@@ -168,6 +173,7 @@ async function metaculus() {
       }
       if (rows.length < 100) break;
     }
+    if (read) console.log(`Metaculus : ${read} questions lues, ${out.length} avec une prévision publique`);
     if (out.length) return { questions: out, status: `${out.length} questions avec une prévision` };
     if (error) console.log(`Metaculus : ${error}`);
   }
