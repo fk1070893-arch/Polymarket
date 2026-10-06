@@ -85,7 +85,7 @@ export function renderTraders(ctx) {
           <header>
             <span class="trader-rank">#${r.rank}</span>
             <span class="trader-name">${r.name ? `<b>${esc(r.name)}</b>` : ""}
-              <a class="${r.name ? "muted small" : ""}" href="https://polygonscan.com/address/${esc(r.wallet)}" target="_blank" rel="noopener noreferrer">${shortAddress(r.wallet)} ↗</a></span>
+              <a class="${r.name ? "muted small" : ""}" href="https://polymarket.com/profile/${esc(r.wallet)}" target="_blank" rel="noopener noreferrer">${shortAddress(r.wallet)} ↗</a></span>
             <span class="trader-pnl ${r.pnl >= 0 ? "up" : "down"}">${signed(r.pnl)}</span>
             <button type="button" class="chip${isF ? " active" : ""}" data-follow="${esc(r.wallet)}" aria-pressed="${isF}">${isF ? "★ Suivi" : "☆ Suivre"}</button>
           </header>

@@ -302,7 +302,7 @@ function alertCard(ctx, a) {
           <span class="wallet">${walletLine(a)}</span>
           <span class="links">
             ${ev ? `<button type="button" class="link" data-open-event="${esc(ev.id)}" data-condition="${esc(a.conditionId)}">Voir le marché</button>` : ""}
-            <a class="link" href="https://polygonscan.com/address/${esc(a.wallet)}" target="_blank" rel="noopener noreferrer">Wallet ↗</a>
+            <a class="link" href="https://polymarket.com/profile/${esc(a.wallet)}" target="_blank" rel="noopener noreferrer">Wallet ↗</a>
           </span>
         </footer>
       </div>
