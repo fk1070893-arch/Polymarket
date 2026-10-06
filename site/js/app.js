@@ -47,6 +47,7 @@ const state = {
   copy: null, // test en direct : copier les alertes
   odds: null, // test en direct : bookmakers
   arbs: null, // anomalies de prix
+  fresh: null, // test en direct : marchés tout neufs
   backtest: null, // résultats du backtest (null = pas encore chargé, false = indisponible)
   crypto: null, // modèle crypto (null = pas encore chargé, false = indisponible)
   marketStates: {}, // prix / résultats des marchés hors liste (portefeuille)
@@ -760,6 +761,7 @@ async function refreshStrategy() {
     load("copy", () => loadData("copy")),
     load("odds", () => loadData("odds")),
     load("arbs", () => loadData("arbs")),
+    load("fresh", () => loadData("fresh")),
   ]);
 }
 

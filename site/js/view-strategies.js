@@ -190,6 +190,40 @@ function oddsSection(st) {
     </section>`;
 }
 
+// ---------- Marchés tout neufs ----------
+
+function freshSection(st) {
+  const title = "Contre les marchés tout neufs à 50 %";
+  if (st === null) return loading(title);
+  if (!st?.summary) return `<section class="verdict live"><h2>${title}</h2><p>Le test démarre au prochain passage de la GitHub Action.</p></section>`;
+  const s = st.summary;
+  const seen = (s.quoted ?? 0) + (s.noQuote ?? 0);
+  const cents0 = (v) => (v == null ? "—" : `${Math.round(v * 100)} ¢`);
+  const sub = (x, label) => (x?.n ? `<li>${label} : ${x.n} pari${x.n > 1 ? "s" : ""}, <b class="${cls(x.roi)}">${sp(x.roi)}</b> par pari</li>` : "");
+  const details = [sub(s.multi, "Événements à plusieurs candidats"), sub(s.single, "Questions simples oui / non")].join("");
+  return `
+    <section class="verdict live" id="strat-neufs">
+      <h2>${title}</h2>
+      <p>Le backtest dit : un marché affiché 40-60 % six heures après son ouverture ne se réalise que 22 % du temps, et acheter « Non » aurait rapporté +44 % par pari.
+        Mais c'est peut-être un <b>prix fantôme</b> (50 % par défaut, faute d'échanges). Ici, on regarde le <b>vrai prix de vente</b> du « Non » dans le carnet d'ordres.</p>
+      ${started(st)}
+      ${
+        seen
+          ? `<p><b>${seen}</b> marché${seen > 1 ? "s" : ""} repéré${seen > 1 ? "s" : ""} : ${s.noQuote ?? 0} sans aucun vendeur de « Non » (prix fantôme pur),
+              ${s.quoted ?? 0} avec un vendeur. Prix payé médian <b>${cents0(s.medianCost)}</b>, soit <b>${cents0(s.medianPremium)}</b> de plus que le prix affiché.</p>`
+          : `<p class="muted">Aucun marché repéré pour l'instant.</p>`
+      }
+      ${stats(s)}
+      ${verdict(s)}
+      ${details ? `<ul class="strat-split">${details}</ul>` : ""}
+      ${betList(st.bets, (b) => ({
+        title: b.eventTitle || b.question,
+        sub: `${b.question !== b.eventTitle ? `${esc(b.question)} · ` : ""}affiché ${pct(b.p)}${b.multi ? " · plusieurs candidats" : ""}`,
+        pick: `1 $ sur <b>Non</b> à ${cents(b.cost)} <span class="muted small">(affiché ${cents(b.mid)})</span>`,
+      }))}
+    </section>`;
+}
+
 // ---------- 4. Anomalies de prix ----------
 
 function arbsSection(st) {
@@ -243,6 +277,7 @@ export function renderStrategies(ctx) {
     ${favoritesSection(state.strategy)}
     ${copySection(state.copy)}
     ${oddsSection(state.odds)}
+    ${freshSection(state.fresh)}
     ${arbsSection(state.arbs)}
     <section class="caveats">
       <h2>Comment lire ces tests</h2>

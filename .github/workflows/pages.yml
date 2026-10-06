@@ -73,6 +73,13 @@ jobs:
         env:
           PAGES_URL: ${{ steps.pages.outputs.base_url }}
 
+      - name: Test en direct - marchés tout neufs
+        run: node scripts/build-fresh.mjs
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          PAGES_URL: ${{ steps.pages.outputs.base_url }}
+
       - name: Anomalies de prix (issues exclusives)
         run: node scripts/build-arbs.mjs
         continue-on-error: true
