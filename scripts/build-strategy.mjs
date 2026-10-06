@@ -118,8 +118,10 @@ function migrate(b) {
 // Valeur du « Non » selon le backtest sport : 1 − fréquence réelle de
 // victoire des favoris de la même tranche de prix (tranches d'au moins 30
 // marchés seulement)
-function fairValues(backtest) {
-  const bins = backtest?.calibration?.byGroup?.sport?.bins ?? [];
+// Pour les paris proches du match, on prend l'étude du backtest faite au
+// même moment (6 h avant) : le biais n'y a pas la même taille.
+function fairValues(backtest, key = "24h") {
+  const bins = (key === "4h" ? backtest?.sportTiming?.["6h"]?.bins : null) ?? backtest?.calibration?.byGroup?.sport?.bins ?? [];
   return bins.filter((b) => b.n >= 30 && b.freq != null).map((b) => ({ lo: b.lo, hi: b.hi, fairNo: 1 - b.freq }));
 }
 
@@ -159,7 +161,9 @@ async function main(prev) {
   const now = Date.now();
   const bets = (prev.bets ?? []).filter((b) => now - b.placedAt < KEEP_FOR).map(migrate);
   const known = new Set(bets.map((b) => b.id));
-  const fair = fairValues(await loadPrevious("backtest.json"));
+  const backtest = await loadPrevious("backtest.json");
+  const fairBy = Object.fromEntries(Object.keys(WINDOWS).map((k) => [k, fairValues(backtest, k)]));
+  const fair = fairBy["24h"];
   // Probabilités des bookmakers, publiées par build-odds.mjs au passage précédent
   const book = (await loadPrevious("odds.json"))?.bookByMarket ?? {};
   console.log(`Prix plafond : ${fair.length ? fair.map((b) => `${Math.round(b.lo * 100)}-${Math.round(b.hi * 100)}% → Non vaut ${Math.round(b.fairNo * 100)} ¢`).join(", ") : "backtest indisponible"}`);
@@ -174,7 +178,7 @@ async function main(prev) {
       const p = m.prices[0];
       if (!(p >= BAND[0] && p <= BAND[1])) continue;
       const cost = askPrices(raw)[1];
-      const cap = capFor(fair, p);
+      const cap = capFor(fairBy[key], p);
       const b = book[m.id];
       const bookP = b && now - b[2] < BOOK_MAX_AGE ? b[0] : null;
       bets.push({
@@ -226,6 +230,7 @@ async function main(prev) {
     startedAt: prev.startedAt ?? new Date(now).toISOString(),
     rule: RULE,
     fair,
+    fairBy,
     // La règle d'origine reste le résumé principal
     summary: variants["24h"],
     variants,

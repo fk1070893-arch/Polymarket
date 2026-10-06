@@ -17,6 +17,8 @@ const SITE = "https://fk1070893-arch.github.io/Polymarket/#strategies";
 const HOUR = 3600000;
 const KEEP = 7 * 24 * HOUR;
 const MAX_LINES = 15;
+// Un résumé par heure au plus (sauf anomalie de prix, envoyée tout de suite)
+const DIGEST_EVERY = 55 * 60000;
 
 const cents = (p) => `${Math.round(p * 100)} ¢`;
 const link = (slug) => (slug ? ` https://polymarket.com/event/${slug}` : "");
@@ -89,23 +91,30 @@ if (!TOKEN || !CHAT) {
   const sent = Object.fromEntries(Object.entries(prev?.sent ?? {}).filter(([, t]) => now - t < KEEP));
   const all = await candidates();
   const fresh = all.filter((c) => !sent[c.key]);
+  let lastSent = prev?.lastSent ?? 0;
+  let didSend = false;
   try {
     if (!prev) {
       // Premier passage : on ne renvoie pas tout l'historique
       await send(`✅ Alertes Polymarket Viewer activées.\nTu recevras un message à chaque nouveau pari fictif intéressant.\n${SITE}`);
       console.log(`Alertes activées, ${all.length} paris existants ignorés`);
+    } else if (fresh.length && now - (prev.lastSent ?? 0) < DIGEST_EVERY && !fresh.some((c) => c.key.startsWith("arb:"))) {
+      console.log(`${fresh.length} nouveautés en attente du prochain résumé`);
     } else if (fresh.length) {
       const lines = fresh.slice(0, MAX_LINES).map((c) => c.text);
       if (fresh.length > MAX_LINES) lines.push(`… et ${fresh.length - MAX_LINES} autres`);
       await send(`${lines.join("\n\n")}\n\nParis fictifs, pour suivre les tests : ${SITE}`);
       console.log(`${fresh.length} nouveautés envoyées`);
+      lastSent = now;
+      didSend = true;
     } else {
       console.log("Rien de nouveau à envoyer");
     }
-    for (const c of all) sent[c.key] ??= now;
+    // Les nouveautés en attente du résumé ne sont pas encore marquées
+    if (didSend || !prev) for (const c of all) sent[c.key] ??= now;
   } catch (err) {
     // On réessaiera au prochain passage
     console.log(`::warning::Alertes Telegram en échec : ${err.message}`);
   }
-  await writeData("notify-state.json", { updatedAt: new Date(now).toISOString(), sent });
+  await writeData("notify-state.json", { updatedAt: new Date(now).toISOString(), lastSent, sent });
 }
