@@ -20,6 +20,7 @@ import { CLOB, GAMMA } from "../site/js/api.js";
 import { normalizeMarket, winnerIndex } from "../site/js/normalize.js";
 import { VOLUME_BUCKETS, brier, calibration, followSignals, groupOf, hashId, parseTime, volumeBucket } from "./backtest-lib.mjs";
 import { modelProbability, parseCryptoQuestion } from "./crypto-model.mjs";
+import { isDeadline, parseUpDown, probUp } from "./niche-lib.mjs";
 import { getJSON, loadPrevious, mapLimit, writeData } from "./lib.mjs";
 import { median, spreadOf } from "./paper.mjs";
 
@@ -33,7 +34,8 @@ const MAX_PER_BUCKET = 700; // marchés par tranche de volume (calibration)
 const MAX_CRYPTO_PER_BUCKET = 700;
 const MIN_VOLUME = 1000; // en dessous, le prix ne veut plus dire grand-chose
 const REFRESH_EVERY = 24 * HOUR;
-const TIME_BUDGET = 12 * 60 * 1000; // on s'arrête proprement au bout de 12 min
+const TIME_BUDGET = 13 * 60 * 1000; // on s'arrête proprement au bout de 13 min
+const MAX_NICHE_PER_BUCKET = 150; // études de niche : marchés par tranche de volume
 
 const started = Date.now();
 const outOfTime = () => Date.now() - started > TIME_BUDGET;
@@ -71,8 +73,9 @@ async function closedEvents({ months, pagesPerMonth, tag, extra = {} }) {
   return [...out.values()];
 }
 
-// Marchés binaires terminés avec un gagnant clair + date de référence
-function closedMarkets(rawEvents) {
+// Marchés binaires terminés avec un gagnant clair, avec leurs dates
+// (création, fin prévue, clôture réelle)
+function resolvedMarkets(rawEvents) {
   const out = [];
   for (const ev of rawEvents) {
     const tags = (ev.tags ?? []).map((t) => t.slug).filter(Boolean);
@@ -82,17 +85,7 @@ function closedMarkets(rawEvents) {
       const w = winnerIndex({ ...m, closed: raw.closed === true || m.closed });
       if (w == null || !m.tokenId) continue;
       const end = parseTime(raw.endDate) ?? parseTime(ev.endDate);
-      const closed = parseTime(raw.closedTime);
-      // On se place toujours 24 h avant la date de fin PRÉVUE. Ne surtout pas
-      // utiliser la date de clôture réelle : pour un marché terminé en
-      // avance (« BTC a touché 130k le 12 »), elle dépend du résultat, et se
-      // placer « la veille de la clôture » revient à regarder toujours la
-      // veille du succès. Les marchés déjà clôturés à ce moment-là sont
-      // écartés : ça, on l'aurait su en vrai.
-      const ref = end;
-      const start = parseTime(raw.startDate) ?? parseTime(raw.createdAt) ?? parseTime(ev.startDate);
-      if (!Number.isFinite(ref) || (start && ref - LOOKBACK < start)) continue;
-      if (closed != null && closed <= ref - LOOKBACK) continue;
+      if (!Number.isFinite(end)) continue;
       out.push({
         id: m.id,
         event: String(ev.id),
@@ -102,8 +95,10 @@ function closedMarkets(rawEvents) {
         group: groupOf(tags),
         tokenId: m.tokenId,
         outcome: w === 0 ? 1 : 0,
-        ref,
-        end: end ?? ref,
+        ref: end,
+        end,
+        start: parseTime(raw.startDate) ?? parseTime(raw.createdAt) ?? parseTime(ev.startDate),
+        closedAt: parseTime(raw.closedTime),
         volume: m.volume,
         bucket: volumeBucket(m.volume),
       });
@@ -112,14 +107,30 @@ function closedMarkets(rawEvents) {
   return out;
 }
 
+// Un marché est jouable à l'instant t0 s'il existait déjà et n'était pas
+// encore clôturé. On se place toujours par rapport à la date de fin PRÉVUE,
+// jamais la clôture réelle : pour un marché terminé en avance (« BTC a
+// touché 130k le 12 »), elle dépend du résultat, et se placer « la veille de
+// la clôture » reviendrait à regarder toujours la veille du succès. Les
+// marchés déjà clôturés à t0 sont écartés : ça, on l'aurait su en vrai.
+function openAt(m, t0) {
+  return t0 < m.end && !(m.start && t0 < m.start) && !(m.closedAt != null && m.closedAt <= t0);
+}
+
+// Marchés jouables 24 h avant leur fin prévue
+function closedMarkets(rawEvents) {
+  return resolvedMarkets(rawEvents).filter((m) => openAt(m, m.ref - LOOKBACK));
+}
+
 // Prix "Oui" d'un marché à un instant donné (dernier point connu avant)
-async function priceAt(tokenId, ts) {
+async function priceAt(tokenId, ts, fidelity = 10) {
   const params = new URLSearchParams({
     market: tokenId,
     // Fenêtre large : sur un petit marché, le dernier échange peut dater
-    startTs: String(Math.floor((ts - 48 * HOUR) / 1000)),
+    // (sauf à la minute près, où 2 h suffisent et allègent la réponse)
+    startTs: String(Math.floor((ts - (fidelity <= 1 ? 2 : 48) * HOUR) / 1000)),
     endTs: String(Math.floor(ts / 1000)),
-    fidelity: "10",
+    fidelity: String(fidelity),
   });
   const data = await getJSON(`${CLOB}/prices-history?${params}`, 2).catch(() => null);
   const pts = (data?.history ?? []).filter((x) => x.t * 1000 <= ts);
@@ -138,15 +149,19 @@ function sampleByBucket(markets, perBucket) {
   return out;
 }
 
-async function withPrices(list) {
+// Prix "Oui" de chaque marché à l'instant t0(m) ; renvoie des copies
+async function withPricesAt(list, t0, { fidelity = 10 } = {}) {
   let done = 0;
-  await mapLimit(list, 8, async (m) => {
-    if (outOfTime()) return;
-    m.p = await priceAt(m.tokenId, m.ref - LOOKBACK);
+  const out = await mapLimit(list, 8, async (m) => {
+    if (outOfTime()) return null;
+    const p = await priceAt(m.tokenId, t0(m), fidelity);
     if (++done % 250 === 0) console.log(`  ${done}/${list.length} prix historiques`);
+    return { ...m, p };
   });
-  return list.filter((m) => m.p != null && m.p > 0 && m.p < 1);
+  return out.filter((m) => m && m.p != null && m.p > 0 && m.p < 1);
 }
+
+const withPrices = (list) => withPricesAt(list, (m) => m.ref - LOOKBACK);
 
 // ---------- Écart achat-vente ----------
 
@@ -189,6 +204,8 @@ function withHalfSpread(samples, spreads) {
 
 // ---------- Étude 1 : calibration ----------
 
+let calibEvents = []; // réutilisés par les études de niche
+
 async function calibrationStudy(spreads) {
   // Les plus gros événements, puis une requête par tranche de volume pour
   // avoir aussi des petits marchés
@@ -199,6 +216,7 @@ async function calibrationStudy(spreads) {
     for (const ev of await closedEvents({ months: MONTHS, pagesPerMonth: 2, extra })) all.set(String(ev.id), ev);
   }
   const events = [...all.values()];
+  calibEvents = events;
   const markets = closedMarkets(events).filter((m) => m.volume >= MIN_VOLUME);
   const counts = VOLUME_BUCKETS.map((b) => `${b.key}: ${markets.filter((m) => m.bucket === b.key).length}`).join(", ");
   console.log(`Calibration : ${events.length} événements, ${markets.length} marchés exploitables (${counts})`);
@@ -322,8 +340,135 @@ async function cryptoStudy(spreads) {
   };
 }
 
+// ---------- Études de niche ----------
+
+// Calibration d'une sélection de marchés à plusieurs instants. Chaque
+// horizon a son propre échantillon : seuls les marchés ouverts à cet
+// instant-là comptent.
+async function horizonStudy(name, markets, horizons, spreads) {
+  const out = {};
+  for (const h of horizons) {
+    if (outOfTime()) break;
+    const ok = markets.filter((m) => openAt(m, h.t0(m)));
+    const samples = withHalfSpread(await withPricesAt(sampleByBucket(ok, MAX_NICHE_PER_BUCKET), h.t0), spreads);
+    console.log(`${name} ${h.key} : ${ok.length} marchés jouables, ${samples.length} avec un prix`);
+    if (samples.length >= 30)
+      out[h.key] = { label: h.label, n: samples.length, events: new Set(samples.map((x) => x.event)).size, brier: brier(samples), bins: calibration(samples) };
+  }
+  return out;
+}
+
+// « X arrivera-t-il avant telle date ? » : 7 jours, 3 jours et 1 jour avant
+async function deadlineStudy(spreads) {
+  const markets = resolvedMarkets(calibEvents).filter(
+    (m) => m.volume >= MIN_VOLUME && isDeadline(m.question) && m.start && m.end - m.start >= 14 * DAY
+  );
+  console.log(`Échéances : ${markets.length} marchés « avant telle date »`);
+  return horizonStudy("Échéances", markets, [
+    { key: "7d", label: "7 jours avant", t0: (m) => m.end - 7 * DAY },
+    { key: "3d", label: "3 jours avant", t0: (m) => m.end - 3 * DAY },
+    { key: "1d", label: "1 jour avant", t0: (m) => m.end - DAY },
+  ], spreads);
+}
+
+// Marchés tout neufs : 6 h et 24 h après leur création
+async function newMarketStudy(spreads) {
+  const markets = resolvedMarkets(calibEvents).filter((m) => m.volume >= MIN_VOLUME && m.start && m.end - m.start >= 3 * DAY);
+  console.log(`Marchés neufs : ${markets.length} marchés d'au moins 3 jours`);
+  return horizonStudy("Marchés neufs", markets, [
+    { key: "6h", label: "6 h après l'ouverture", t0: (m) => m.start + 6 * HOUR },
+    { key: "24h", label: "24 h après l'ouverture", t0: (m) => m.start + DAY },
+  ], spreads);
+}
+
+// Bougies d'une minute Deribit : prix d'ouverture à `from`, dernier prix connu à `to`
+async function minuteCandles(asset, from, to) {
+  const qs = new URLSearchParams({
+    instrument_name: `${asset}-PERPETUAL`,
+    resolution: "1",
+    start_timestamp: String(from - 60000),
+    end_timestamp: String(to),
+  });
+  const r = (await getJSON(`${DERIBIT}/get_tradingview_chart_data?${qs}`, 2).catch(() => null))?.result;
+  if (!r?.ticks?.length) return null;
+  const i0 = r.ticks.findIndex((t) => t >= from);
+  // Une bougie commencée à t se termine à t + 1 min : seules les bougies finies avant `to` comptent
+  let i1 = -1;
+  r.ticks.forEach((t, i) => {
+    if (t + 60000 <= to) i1 = i;
+  });
+  if (i0 < 0 || i1 < 0 || i0 - 1 > i1) return null;
+  return { open: r.open[i0], spot: r.close[i1] };
+}
+
+// « Bitcoin Up or Down » à l'heure et au quart d'heure : à mi-fenêtre, le
+// modèle (prix d'ouverture, prix actuel, volatilité DVOL) contre Polymarket.
+async function updownStudy(spreads) {
+  const now = Date.now();
+  const events = await closedEvents({ months: 1, pagesPerMonth: 6, tag: "crypto" });
+  const markets = [];
+  for (const ev of events) {
+    for (const raw of ev.markets ?? []) {
+      const u = parseUpDown(raw.question || ev.title);
+      if (!u) continue;
+      const m = normalizeMarket(raw);
+      const up = m.outcomes.findIndex((o) => /^up$/i.test(o));
+      const tokens = (() => {
+        try {
+          return Array.isArray(raw.clobTokenIds) ? raw.clobTokenIds : JSON.parse(raw.clobTokenIds ?? "[]");
+        } catch {
+          return [];
+        }
+      })();
+      const w = winnerIndex({ ...m, closed: true });
+      const end = parseTime(raw.endDate);
+      if (up < 0 || w == null || !tokens[up] || !end) continue;
+      const start = end - u.minutes * 60000;
+      const t0 = start + (u.minutes * 60000) / 2;
+      const closedAt = parseTime(raw.closedTime);
+      if (closedAt != null && closedAt <= t0) continue;
+      markets.push({ id: m.id, event: String(end), asset: u.asset, minutes: u.minutes, tokenId: String(tokens[up]), outcome: w === up ? 1 : 0, start, t0, end, volume: m.volume, bucket: volumeBucket(m.volume) });
+    }
+  }
+  const sample = markets.sort((a, b) => hashId(`${a.id}:ud`) - hashId(`${b.id}:ud`)).slice(0, 400);
+  console.log(`Up or Down : ${events.length} événements, ${markets.length} marchés BTC/ETH (15 min / 1 h), ${sample.length} tirés au sort`);
+  if (!sample.length) return null;
+
+  const dvol = {};
+  for (const a of ["BTC", "ETH"]) dvol[a] = await deribitSeries("get_volatility_index_data", { currency: a, resolution: "3600" }, now - 35 * DAY, now);
+  const priced = await withPricesAt(sample, (m) => m.t0, { fidelity: 1 });
+  const samples = [];
+  await mapLimit(priced, 6, async (m) => {
+    if (outOfTime()) return;
+    const c = await minuteCandles(m.asset, m.start, m.t0);
+    const v = valueAt(dvol[m.asset], m.t0);
+    if (!c || !v) return;
+    const model = probUp(c.open, c.spot, v / 100, (m.end - m.t0) / (365.25 * DAY));
+    if (model == null) return;
+    samples.push({ ...m, model });
+  });
+  withHalfSpread(samples, spreads);
+  console.log(`Up or Down : ${samples.length} marchés rejoués`);
+  if (samples.length < 30) return { n: samples.length };
+  const byWindow = {};
+  for (const w of [15, 60]) {
+    const s = samples.filter((x) => x.minutes === w);
+    if (s.length >= 20) byWindow[w] = { n: s.length, brierModel: brier(s, "model"), brierPoly: brier(s, "p"), signals: followSignals(s, 0.05) };
+  }
+  const thresholds = {};
+  for (const t of [0.03, 0.05, 0.1]) thresholds[t] = followSignals(samples, t);
+  return {
+    n: samples.length,
+    events: new Set(samples.map((x) => x.event)).size,
+    brierModel: brier(samples, "model"),
+    brierPoly: brier(samples, "p"),
+    thresholds,
+    byWindow,
+  };
+}
+
 // Résumé lisible dans les logs de l'Action
-function logSummary(calib, crypto) {
+function logSummary(calib, crypto, niche = {}) {
   const p = (v) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${Math.round(v * 100)}%`);
   const ci = (c) => (c ? `[${p(c[0])} ; ${p(c[1])}]` : "[—]");
   const rows = (bins) =>
@@ -348,8 +493,19 @@ function logSummary(calib, crypto) {
       );
     for (const [k, r] of Object.entries(crypto.byVolume ?? {}))
       console.log(`  volume ${k} : n=${r.n} (${r.events} év.) Brier modèle ${r.brierModel.toFixed(3)} / Polymarket ${r.brierPoly.toFixed(3)}, signaux ${r.signals.all.bets}, gain/pari ${p(r.signals.all.roi)} ${ci(r.signals.all.ci)}`);
-    for (const [k, r] of Object.entries(crypto.byKind))
+    for (const [k, r] of Object.entries(crypto.byKind ?? {}))
       console.log(`  ${k} : n=${r.n} (${r.events} év.) Brier modèle ${r.brierModel.toFixed(3)} / Polymarket ${r.brierPoly.toFixed(3)}, signaux ${r.signals.all.bets}, gain/pari ${p(r.signals.all.roi)} ${ci(r.signals.all.ci)} (A ${p(r.signals.A.roi)} / B ${p(r.signals.B.roi)})`);
+  }
+  for (const [name, study] of [["Échéances", niche.deadline], ["Marchés neufs", niche.fresh]]) {
+    for (const [k, r] of Object.entries(study ?? {})) console.log(`\n=== ${name} ${k} (${r.n} marchés, ${r.events} événements, Brier ${r.brier.toFixed(3)}) ===\n${rows(r.bins)}`);
+  }
+  const ud = niche.updown;
+  if (ud?.thresholds) {
+    console.log(`\n=== Up or Down (${ud.n} marchés) Brier modèle ${ud.brierModel.toFixed(3)} / Polymarket ${ud.brierPoly.toFixed(3)} ===`);
+    for (const [t, r] of Object.entries(ud.thresholds))
+      console.log(`  écart ≥ ${Math.round(t * 100)} pts : ${r.all.bets} paris, gain/pari ${p(r.all.roi)} ${ci(r.all.ci)}, au prix payé ${p(r.all.roiExec)} ${ci(r.all.ciExec)} (A ${p(r.A.roi)} / B ${p(r.B.roi)})`);
+    for (const [w, r] of Object.entries(ud.byWindow ?? {}))
+      console.log(`  ${w} min : n=${r.n} Brier modèle ${r.brierModel.toFixed(3)} / Polymarket ${r.brierPoly.toFixed(3)}, signaux ${r.signals.all.bets}, ${p(r.signals.all.roiExec)} ${ci(r.signals.all.ciExec)}`);
   }
 }
 
@@ -367,6 +523,15 @@ if (prev && !force && age < REFRESH_EVERY) {
     const spreads = await spreadStudy();
     const calib = await calibrationStudy(spreads);
     const crypto = outOfTime() ? null : await cryptoStudy(spreads);
+    // Études de niche : chacune peut échouer sans faire tomber le reste
+    const niche = {};
+    for (const [k, fn] of [["deadline", deadlineStudy], ["fresh", newMarketStudy], ["updown", updownStudy]]) {
+      if (outOfTime()) break;
+      niche[k] = await fn(spreads).catch((err) => {
+        console.log(`::warning::Étude ${k} en échec : ${err.message}`);
+        return null;
+      });
+    }
     await writeData("backtest.json", {
       updatedAt: new Date().toISOString(),
       lookbackHours: LOOKBACK / HOUR,
@@ -374,9 +539,10 @@ if (prev && !force && age < REFRESH_EVERY) {
       spreads,
       calibration: calib,
       crypto,
+      ...niche,
     });
     console.log(`Backtest terminé en ${Math.round((Date.now() - started) / 1000)} s`);
-    logSummary(calib, crypto);
+    logSummary(calib, crypto, niche);
   } catch (err) {
     console.log(`::warning::Backtest en échec : ${err.message}`);
     if (prev) await writeData("backtest.json", prev);

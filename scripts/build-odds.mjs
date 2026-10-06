@@ -51,7 +51,16 @@ const WANTED = [
   "soccer_uefa_europa_league",
   "basketball_ncaab",
   "basketball_euroleague",
+  // Ligues secondaires : moins surveillées sur Polymarket
+  "soccer_netherlands_eredivisie",
+  "soccer_portugal_primeira_liga",
+  "soccer_usa_mls",
+  "soccer_brazil_campeonato",
+  "soccer_mexico_ligamx",
+  "soccer_turkey_super_league",
 ];
+// Tournois de tennis en cours (leur clé change à chaque tournoi)
+const TENNIS = /^tennis_(atp|wta)_/;
 
 // Appel à The Odds API sans jamais laisser la clé apparaître dans une erreur
 const quota = { remaining: null, used: null };
@@ -91,7 +100,7 @@ async function refreshOdds(state, now) {
 
   // La liste des ligues ne consomme pas de quota
   const active = new Set((await odds("/sports")).filter((s) => s.active && !s.has_outrights).map((s) => s.key));
-  const leagues = WANTED.filter((k) => active.has(k));
+  const leagues = [...WANTED.filter((k) => active.has(k)), ...[...active].filter((k) => TENNIS.test(k))];
   if (!leagues.length) return "aucune ligue suivie en saison";
   // La ligue la moins fraîche, en sautant celles sans match à venir
   // (revues tous les 3 jours seulement)
@@ -125,7 +134,7 @@ async function refreshOdds(state, now) {
 // Événements sport Polymarket des 3 prochains jours
 async function polyGames(now) {
   const out = [];
-  for (let page = 0; page < 6; page++) {
+  for (let page = 0; page < 12; page++) {
     const params = new URLSearchParams({
       tag_slug: "sports",
       active: "true",

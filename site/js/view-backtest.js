@@ -10,7 +10,7 @@ const MIN_ROI = 0.05;
 const VOLUME_LABELS = { "<10k": "Moins de 10 k$", "10k-100k": "10 k$ – 100 k$", "100k-1M": "100 k$ – 1 M$", ">1M": "Plus de 1 M$" };
 
 // Un seul segment à la fois : une catégorie OU une tranche de volume
-const filter = { group: "all", volume: "all" };
+const filter = { group: "all", volume: "all", deadline: "7d", fresh: "6h" };
 let bound = false;
 const $ = (id) => document.getElementById(id);
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -287,10 +287,92 @@ function spreadsLine(spreads) {
   return parts.length ? ` · écart achat-vente typique : ${parts.join(", ")}` : "";
 }
 
+// Études de niche « calibration à plusieurs instants » (échéances, marchés neufs)
+function horizonSection(study, key, intro) {
+  const keys = Object.keys(study ?? {});
+  if (!keys.length) return `<p class="empty-inline">Pas encore de résultat : l'étude sera calculée au prochain backtest.</p>`;
+  if (!keys.includes(filter[key])) filter[key] = keys[0];
+  const cur = study[filter[key]];
+  const found = findings(cur.bins);
+  return `
+    <p>${intro}</p>
+    <nav class="chips">
+      ${keys
+        .map(
+          (k) =>
+            `<button type="button" class="chip${k === filter[key] ? " active" : ""}" data-bt-study="${key}" data-bt-horizon="${esc(k)}" aria-pressed="${k === filter[key]}">${esc(
+              study[k].label
+            )} <span class="count">${study[k].n}</span></button>`
+        )
+        .join("")}
+    </nav>
+    <div class="calib-findings">
+      <h3>Biais stables trouvés</h3>
+      ${
+        found.length
+          ? `<ul>${found.map((f) => `<li>${f}</li>`).join("")}</ul>`
+          : `<p>Aucun biais assez fort et stable à ce moment-là : pas d'argent facile à prendre.</p>`
+      }
+    </div>
+    ${calibrationTable(cur.bins)}`;
+}
+
+// Crypto « Up or Down » : modèle de mi-fenêtre contre Polymarket
+function updownSection(u) {
+  if (!u?.thresholds) return `<p class="empty-inline">Pas encore de résultat : l'étude sera calculée au prochain backtest.</p>`;
+  const t5 = u.thresholds["0.05"];
+  const ci = t5?.all.ciExec ?? t5?.all.ci;
+  const roi = t5 ? exec(t5.all, "roi") : null;
+  const verdict = !t5 || t5.all.bets < MIN_N
+    ? "Trop peu de signaux pour conclure."
+    : ci && ci[0] > 0 && exec(t5.A, "roi") > 0 && exec(t5.B, "roi") > 0
+      ? `<b class="up">Les écarts de 5 pts auraient rapporté ${signedPct(roi)} par pari au prix payé, marge ${ciText(ci)} entièrement positive.</b> À confirmer en direct (et il faudrait être rapide : ces marchés bougent à la minute).`
+      : ci && ci[1] < 0
+        ? `<b class="down">Suivre le modèle aurait perdu de l'argent (marge ${ciText(ci)}).</b> Polymarket intègre déjà le mouvement du prix.`
+        : `<b>Résultat (${signedPct(roi ?? 0)}, marge ${ciText(ci) || "inconnue"}) compatible avec le hasard.</b> Pas d'avantage démontré.`;
+  return `
+    <p>Marchés « Bitcoin / Ethereum Up or Down » d'un quart d'heure ou d'une heure, rejoués à <b>mi-fenêtre</b> sur <b>${u.n}</b> marchés :
+      connaissant le prix d'ouverture, le prix du moment et la volatilité, la probabilité de finir en hausse se calcule.
+      Erreur moyenne (Brier) : modèle <b>${u.brierModel.toFixed(3)}</b>, Polymarket <b>${u.brierPoly.toFixed(3)}</b>.
+      <b class="${u.brierModel < u.brierPoly ? "up" : "down"}">${u.brierModel < u.brierPoly ? "Le modèle a été plus précis." : "Polymarket a été aussi précis ou plus."}</b></p>
+    <p>${verdict}</p>
+    <div class="table-wrap">
+      <table class="bt-table">
+        <thead><tr><th>Écart minimum</th><th class="num">Paris</th><th class="num">Gagnés</th><th class="num">Gain / pari au prix payé (marge 90 %)</th><th class="num">Moitié A</th><th class="num">Moitié B</th></tr></thead>
+        <tbody>
+          ${Object.entries(u.thresholds)
+            .map(
+              ([t, r]) => `
+            <tr class="${r.all.bets < MIN_N ? "thin" : ""}">
+              <td>${Math.round(Number(t) * 100)} pts</td>
+              <td class="num">${r.all.bets}</td>
+              <td class="num">${r.all.bets ? pct(r.all.wins / r.all.bets) : "—"}</td>
+              ${roiCell(exec(r.all, "roi"), r.all.ciExec ?? r.all.ci)}${roiCell(exec(r.A, "roi"))}${roiCell(exec(r.B, "roi"))}
+            </tr>`
+            )
+            .join("")}
+        </tbody>
+      </table>
+    </div>
+    ${
+      Object.keys(u.byWindow ?? {}).length
+        ? `<p class="muted small">${Object.entries(u.byWindow)
+            .map(([w, r]) => `${w} min : ${r.n} marchés, Brier modèle ${r.brierModel.toFixed(3)} / Polymarket ${r.brierPoly.toFixed(3)}`)
+            .join(" · ")}. Le modèle utilise le prix Deribit ; Polymarket règle sur Binance, quelques dollars d'écart possibles.</p>`
+        : ""
+    }`;
+}
+
 function bind(ctx) {
   if (bound) return;
   bound = true;
   $("backtest-body").addEventListener("click", (e) => {
+    const hz = e.target.closest("[data-bt-horizon]");
+    if (hz) {
+      filter[hz.dataset.btStudy] = hz.dataset.btHorizon;
+      renderBacktest(ctx);
+      return;
+    }
     const chip = e.target.closest("[data-bt-group]");
     const vchip = e.target.closest("[data-bt-volume]");
     if (chip) {
@@ -387,6 +469,29 @@ export function renderBacktest(ctx) {
       ${cryptoSection(data.crypto)}
     </section>
 
+    <section class="verdict">
+      <h2>3. Les « avant telle date » fondent-ils ?</h2>
+      ${horizonSection(
+        data.deadline,
+        "deadline",
+        "Marchés du type « X arrivera-t-il avant le 31 décembre ? », pris 7, 3 et 1 jour avant l'échéance. Si le « Oui » garde un prix d'espoir alors que rien n'arrive, acheter « Non » rapporte."
+      )}
+    </section>
+
+    <section class="verdict">
+      <h2>4. Les marchés tout neufs sont-ils mal cotés ?</h2>
+      ${horizonSection(
+        data.fresh,
+        "fresh",
+        "Prix 6 h et 24 h après l'ouverture d'un marché (marchés d'au moins 3 jours), quand il y a encore peu de traders."
+      )}
+    </section>
+
+    <section class="verdict">
+      <h2>5. Crypto « Up or Down » : calculable ?</h2>
+      ${updownSection(data.updown)}
+    </section>
+
     <section class="caveats">
       <h2>Comment lire ces résultats</h2>
       <ul>
@@ -394,6 +499,7 @@ export function renderBacktest(ctx) {
         <li><b>Par événement :</b> les marchés d'un même événement (les seuils d'un même jour, le vainqueur et le handicap d'un même match) gagnent ou perdent ensemble. Ils comptent comme un seul pari pour les signaux et restent ensemble dans la même moitié.</li>
         <li><b>Deux moitiés :</b> les événements sont répartis au hasard en A et B. Un effet qui n'existe que dans une moitié est probablement de la chance.</li>
         <li><b>Marge d'erreur :</b> l'intervalle entre crochets contient 90 % des résultats qu'on obtiendrait en retirant d'autres événements au hasard. Il apparaît en gras quand il ne contient pas zéro : le gain (ou la perte) a alors peu de chances d'être dû au hasard.</li>
+        <li><b>Beaucoup d'idées testées :</b> avec des dizaines de tranches et d'études, quelques-unes sortiront « positives » par pur hasard. Un résultat n'est crédible que s'il est stable dans les deux moitiés, avec une marge entièrement positive, et qu'il tient ensuite en direct.</li>
         <li><b>Le passé n'est pas l'avenir :</b> un biais connu finit souvent par disparaître quand d'autres l'exploitent.</li>
         <li><b>Prix payé :</b> on achète au prix vendeur, plus cher que le prix affiché. L'écart est estimé à partir des marchés ouverts aujourd'hui de même taille. Les grosses mises font aussi bouger le prix : les gains valent pour de petites sommes.</li>
         <li><b>Petits marchés :</b> c'est là que les prix se trompent le plus souvent, mais aussi là où l'écart achat-vente est le plus large et où le dernier prix peut dater de plusieurs heures. Un gain affiché sur la tranche « moins de 10 k$ » est le plus dur à obtenir en vrai : on ne peut y miser que de petites sommes sans faire bouger le prix.</li>

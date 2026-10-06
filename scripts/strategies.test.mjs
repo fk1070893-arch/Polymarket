@@ -163,3 +163,30 @@ test("le gain au prix payé tient compte de l'écart achat-vente", () => {
   );
   assert.ok(sig.all.roiExec < sig.all.roi);
 });
+
+// ---------- Études de niche ----------
+
+import { isDeadline, parseUpDown, probUp } from "./niche-lib.mjs";
+
+test("marchés « avant telle date »", () => {
+  assert.ok(isDeadline("Will Russia and Ukraine sign a ceasefire by December 31?"));
+  assert.ok(isDeadline("Will the Fed cut rates before 2027?"));
+  assert.ok(isDeadline("Will X be released by end of Q3?"));
+  assert.ok(!isDeadline("Will Bitcoin reach $150,000 by December 31?"));
+  assert.ok(!isDeadline("Who will win the election?"));
+});
+
+test("marchés Up or Down", () => {
+  assert.deepEqual(parseUpDown("Bitcoin Up or Down - October 5, 3:00PM-3:15PM ET"), { asset: "BTC", minutes: 15 });
+  assert.deepEqual(parseUpDown("Ethereum Up or Down - October 5, 11PM ET"), { asset: "ETH", minutes: 60 });
+  assert.deepEqual(parseUpDown("Bitcoin Up or Down - October 5, 11:45PM-12:00AM ET"), { asset: "BTC", minutes: 15 });
+  assert.equal(parseUpDown("Bitcoin Up or Down on October 5?"), null);
+  assert.equal(parseUpDown("Solana Up or Down - October 5, 3PM ET"), null);
+});
+
+test("probabilité de finir au-dessus de l'ouverture", () => {
+  close(probUp(100, 100, 0.5, 0.0001), 0.5);
+  assert.ok(probUp(100, 101, 0.5, 30 / 525960) > 0.9);
+  assert.ok(probUp(100, 99.9, 0.5, 30 / 525960) < 0.5);
+  assert.equal(probUp(0, 100, 0.5, 1), null);
+});
