@@ -110,27 +110,61 @@ async function blockAt(ts) {
 // Journaux de la blockchain entre deux instants (ms) pour un filtre donné.
 // La plage de blocs par requête grandit tant que le serveur l'accepte, et se
 // réduit s'il la refuse : peu de requêtes même sur plusieurs semaines.
-let step = 20000;
+// Chaque serveur a sa propre limite de plage de blocs pour les journaux :
+// on l'apprend en route (on double tant qu'il accepte, on divise par 4
+// s'il refuse) et on écarte ceux qui n'acceptent que de toutes petites plages.
+const LOG_SERVERS = [
+  "https://polygon-bor-rpc.publicnode.com",
+  "https://polygon.drpc.org",
+  "https://polygon-rpc.com",
+  "https://polygon.llamarpc.com",
+  "https://polygon-mainnet.public.blastapi.io",
+].map((url) => ({ url, step: 20000, dead: false, fails: 0 }));
+let logServer = 0;
+const MIN_STEP = 1000;
+
+async function getLogsFrom(server, params) {
+  const res = await fetch(server.url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_getLogs", params }),
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status} sur ${new URL(server.url).host}`);
+  const data = await res.json();
+  if (data.error) throw Object.assign(new Error(`${data.error.message ?? "erreur"} (${new URL(server.url).host})`), { rpcError: true });
+  return data.result ?? [];
+}
+
+// Journaux de la blockchain entre deux instants (ms) pour un filtre donné
 async function scanLogs(filter, fromMs, toMs) {
   const from = await blockAt(Math.floor(fromMs / 1000));
   const to = Math.min((await latestBlock()).number, await blockAt(Math.floor(toMs / 1000)));
   const out = [];
-  for (let start = from; start <= to; ) {
-    const end = Math.min(to, start + step - 1);
-    let logs;
+  let lastErr = null;
+  for (let start = from, tries = 0; start <= to; ) {
+    const alive = LOG_SERVERS.filter((x) => !x.dead);
+    if (!alive.length || tries > 30) throw lastErr ?? new Error("aucun serveur Polygon ne répond");
+    const server = alive[logServer % alive.length];
+    const end = Math.min(to, start + server.step - 1);
     try {
-      logs = await rpc("eth_getLogs", [{ ...filter, fromBlock: `0x${start.toString(16)}`, toBlock: `0x${end.toString(16)}` }]);
+      out.push(...(await getLogsFrom(server, [{ ...filter, fromBlock: `0x${start.toString(16)}`, toBlock: `0x${end.toString(16)}` }])));
+      start = end + 1;
+      tries = 0;
+      server.fails = 0;
+      server.step = Math.min(200000, server.step * 2);
     } catch (err) {
-      // Plage refusée ou trop lente (délai dépassé) : on la réduit
-      if (step > 500) {
-        step = Math.max(500, Math.floor(step / 4));
-        continue;
+      lastErr = err;
+      tries++;
+      const rangeIssue = (err.rpcError && /range|limit|exceed|too many|block|large/i.test(err.message)) || err.name === "TimeoutError";
+      if (rangeIssue && server.step > MIN_STEP) {
+        server.step = Math.max(MIN_STEP, Math.floor(server.step / 4));
+      } else {
+        // Limite trop petite, ou serveur en panne : on passe au suivant
+        if (rangeIssue || ++server.fails >= 3) server.dead = true;
+        logServer++;
       }
-      throw err;
     }
-    out.push(...(logs ?? []));
-    start = end + 1;
-    if (step < 200000) step = Math.min(200000, step * 2);
   }
   return out;
 }
@@ -479,6 +513,7 @@ async function main(prev) {
     `Pistes : ${all.length} wallets récents dans les alertes, ${done} lus ce passage (${failures} en échec via ${view.source}), ${withOrigin.length} founders trouvés, ${relays} passés par un relais, ${viaOther} trouvés par le propriétaire ou des parts, ${owners} propriétaires lus, ${mains} compte principal probable, ${clusters.length} adresse(s) derrière plusieurs suspects`
   );
   if (failures && !done) console.log(`::warning::Blockchain Polygon illisible : ${lastError}`);
+  else if (failures) console.log(`Exemple d'échec : ${lastError}`);
   return { state: { traced, funders, at: now }, view };
 }
 
