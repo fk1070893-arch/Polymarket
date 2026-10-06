@@ -2408,3 +2408,28 @@ label.check {
 .realism b:not(.up):not(.down) {
   color: var(--text);
 }
+
+.bots-grid {
+  margin-top: 16px;
+}
+
+.bot-card .btn {
+  align-self: flex-start;
+}
+
+.bot-extra {
+  margin: 0;
+  color: var(--muted);
+}
+
+.bot-extra b:not(.up):not(.down) {
+  color: var(--text);
+}
+
+.bot-bets {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 0.85rem;
+  display: grid;
+  gap: 4px;
+}

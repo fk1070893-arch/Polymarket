@@ -157,6 +157,12 @@ jobs:
 
       # Secrets TELEGRAM_BOT_TOKEN et TELEGRAM_CHAT_ID (jamais affichés) ;
       # sans eux, l'étape ne fait rien
+      # Plusieurs bots fictifs, chacun branché sur un signal, pour comparer
+      - name: Arène des bots
+        run: node scripts/build-bots.mjs
+        continue-on-error: true
+        timeout-minutes: 4
+
       - name: Alertes Telegram
         run: node scripts/build-notify.mjs
         continue-on-error: true
@@ -196,6 +202,7 @@ jobs:
             echo "::group::Relecture $n"
             node scripts/build-alerts.mjs || true
             node scripts/build-copy.mjs || true
+            BOTS_FAST=1 node scripts/build-bots.mjs || true
             echo "::endgroup::"
           done
           echo "$n relecture(s) supplémentaire(s) des alertes"

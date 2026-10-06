@@ -47,6 +47,10 @@ Tous les prix sont pris 24 h avant la fin (aucune information future), et chaque
 - **Modèle crypto :** une fois le test rendu honnête (statistiques par événement, prix pris 24 h avant la fin *prévue*), il fait jeu égal avec Polymarket (Brier 0,033 contre 0,033) et ses signaux n'ont pas d'avantage prouvé. L'onglet Modèle crypto présente donc ses écarts comme une simple comparaison.
 - **Favoris en sport :** quand la première issue d'un marché sport est cotée 70-80 % la veille, elle ne gagne que 65 % du temps. Parier contre aurait rapporté +34 % par pari, marge [+6 % ; +62 %], positif dans les deux moitiés, et la même tendance apparaît de 60 % à 90 %.
 
+### Arène des bots
+
+L'onglet **Bots** (`scripts/build-bots.mjs`) fait parier en même temps 14 robots fictifs, chacun branché sur un signal : alertes (score 70+, grosses mises, outsiders, favoris, plusieurs wallets d'accord, et l'inverse des alertes 70+), achats des 10 meilleurs traders de la semaine, bookmakers et Kalshi (3 pts d'écart), modèle crypto (10 pts), tendance et retour en arrière après un mouvement de 15 pts en 24 h, favoris et outsiders des marchés qui se terminent dans les 48 h. Chaque bot mise 1 $ par signal au prix réellement payé pour 100 $ (carnet d'ordres, frais), une fois par issue. Classement d'après la borne basse de la marge d'erreur, avec rendement par an et gain à 1 000 $ par pari. Les bots qui suivent les alertes et les traders tournent aussi toutes les minutes.
+
 ### Stratégies testées en direct
 
 L'onglet **Stratégies** met les idées à l'épreuve sur les marchés en cours, que le backtest n'a jamais vus. Chaque pari est fictif (1 $), enregistré au **prix réellement payé** (meilleur prix vendeur du moment, pas le prix affiché), puis réglé à la clôture ; le gain au prix affiché est gardé à côté pour comparer. Il faut 50 à 100 paris réglés avant de conclure.

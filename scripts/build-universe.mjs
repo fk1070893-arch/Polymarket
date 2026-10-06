@@ -15,7 +15,7 @@ const EVENT_FIELDS = ["id", "slug", "title", "image", "icon", "endDate", "startD
 const MARKET_FIELDS = [
   "id", "question", "conditionId", "groupItemTitle", "outcomes", "outcomePrices", "clobTokenIds", "bestBid", "bestAsk",
   "volumeNum", "volume", "endDate", "startDate", "createdAt", "closed", "active", "acceptingOrders", "enableOrderBook",
-  "negRisk", "sportsMarketType", "gameStartTime", "closedTime", "feesEnabled", "feeSchedule", "feeType",
+  "negRisk", "sportsMarketType", "gameStartTime", "closedTime", "feesEnabled", "feeSchedule", "feeType", "oneDayPriceChange",
 ];
 
 const pick = (obj, fields) => Object.fromEntries(fields.filter((f) => obj[f] !== undefined).map((f) => [f, obj[f]]));

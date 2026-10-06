@@ -27,6 +27,7 @@ import { renderStrategies } from "./view-strategies.js";
 import { renderRadar } from "./view-radar.js";
 import { renderCalendar } from "./view-calendar.js";
 import { renderTraders } from "./view-traders.js";
+import { renderBots } from "./view-bots.js";
 import { marketInsights } from "./view-insights.js";
 
 const PAGE = 24;
@@ -37,6 +38,7 @@ const VIEWS = {
   alertes: "alerts",
   strategies: "strategies",
   calendrier: "calendar",
+  bots: "bots",
   traders: "traders",
   crypto: "crypto",
   backtest: "backtest",
@@ -70,6 +72,7 @@ const state = {
   cross: null, // Kalshi et Metaculus
   calendar: null, // fins de marché et résultats récents
   leaders: null, // classement des traders
+  bots: null, // arène des bots
   backtest: null, // résultats du backtest (null = pas encore chargé, false = indisponible)
   crypto: null, // modèle crypto (null = pas encore chargé, false = indisponible)
   marketStates: {}, // prix / résultats des marchés hors liste (portefeuille)
@@ -400,6 +403,8 @@ function renderView() {
     renderCalendar(ctx);
   } else if (state.view === "traders") {
     renderTraders(ctx);
+  } else if (state.view === "bots") {
+    renderBots(ctx);
   } else if (state.view === "learn") {
     // page statique
   } else if (state.view === "backtest") {
@@ -432,6 +437,7 @@ function onRoute() {
     if (NEEDS_TESTS.has(view) && state.strategy === null) reload(refreshStrategy);
     if (view === "calendar" && state.calendar === null) reload(refreshCalendar);
     if (view === "traders" && state.leaders === null) reload(refreshLeaders);
+    if (view === "bots" && state.bots === null) reload(refreshBots);
   }
   if (!slug && $("detail").open) $("detail").close(); // lien vers un onglet depuis une fiche
   renderView();
@@ -848,6 +854,14 @@ async function refreshCalendar() {
   }
 }
 
+async function refreshBots() {
+  try {
+    state.bots = await loadData("bots");
+  } catch {
+    state.bots ??= false;
+  }
+}
+
 async function refreshLeaders() {
   try {
     state.leaders = await loadData("leaders");
@@ -908,6 +922,7 @@ async function refresh({ initial = false } = {}) {
       NEEDS_TESTS.has(state.view) ? refreshStrategy() : null,
       state.view === "calendar" ? refreshCalendar() : null,
       state.view === "traders" ? refreshLeaders() : null,
+      state.view === "bots" ? refreshBots() : null,
     ]);
     Object.assign(state, data);
     mergeCryptoEvents();
