@@ -204,8 +204,8 @@ test("courbe des gains cumulés", () => {
     [1, -1, 1],
     [3, 1, 2],
   ]);
-  const many = Array.from({ length: 500 }, (_, i) => ({ won: true, roi: 1, resolvedAt: i }));
+  const many = Array.from({ length: 500 }, (_, i) => ({ won: true, roi: 1, resolvedAt: i + 1 }));
   const c = pnlCurve(many, 50);
   assert.equal(c.length, 50);
-  assert.deepEqual(c[c.length - 1], [499, 500, 500]);
+  assert.deepEqual(c[c.length - 1], [500, 500, 500]);
 });
