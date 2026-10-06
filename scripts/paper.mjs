@@ -56,6 +56,47 @@ function tokenIds(raw) {
   }
 }
 
+// Offres de vente d'une issue, de la moins chère à la plus chère (null si
+// le carnet d'ordres ne répond pas)
+async function fetchAsks(token) {
+  const book = await getJSON(`${CLOB}/book?token_id=${encodeURIComponent(token)}`, 2).catch(() => null);
+  if (!book) return null;
+  return (book.asks ?? [])
+    .map((o) => ({ price: num(o.price), size: num(o.size) }))
+    .filter((o) => o.price > 0 && o.price < 1 && o.size > 0)
+    .sort((a, b) => a.price - b.price);
+}
+
+// Parts disponibles à l'achat d'après les offres de vente :
+//  - au meilleur prix ;
+//  - au prix `limit` ou moins cher (ex. le prix payé par un wallet suivi) ;
+//  - jusqu'à 5 ¢ au-dessus du meilleur prix (et leur valeur en $).
+export function depthOf(asks, limit = null) {
+  if (!asks?.length) return { best: null, atBest: 0, atLimit: limit != null ? 0 : null, within5: 0, usd5: 0 };
+  const best = asks[0].price;
+  let atBest = 0;
+  let atLimit = 0;
+  let within5 = 0;
+  let usd5 = 0;
+  for (const o of asks) {
+    if (o.price <= best + 1e-9) atBest += o.size;
+    if (limit != null && o.price <= limit + 1e-9) atLimit += o.size;
+    if (o.price <= best + 0.05 + 1e-9) {
+      within5 += o.size;
+      usd5 += o.size * o.price;
+    }
+  }
+  const r = Math.round;
+  return { best, atBest: r(atBest), atLimit: limit != null ? r(atLimit) : null, within5: r(within5), usd5: r(usd5) };
+}
+
+export async function bookDepth(raw, side, limit = null) {
+  const token = tokenIds(raw)[side];
+  if (!token) return null;
+  const asks = await fetchAsks(token);
+  return asks ? depthOf(asks, limit) : null;
+}
+
 // Coût réel par part de 1 $ pour acheter l'issue `side` avec `stake` $ :
 //  { cost, best, fee, filled, slippage } ; repli sur le meilleur prix
 // vendeur (sans glissement) si le carnet d'ordres ne répond pas.
@@ -63,15 +104,8 @@ export async function realCost(raw, side, stake = STAKE) {
   const rate = feeRate(raw);
   const best = askPrices(raw)[side];
   const token = tokenIds(raw)[side];
-  let walked = null;
-  if (token) {
-    const book = await getJSON(`${CLOB}/book?token_id=${encodeURIComponent(token)}`, 2).catch(() => null);
-    const asks = (book?.asks ?? [])
-      .map((o) => ({ price: num(o.price), size: num(o.size) }))
-      .filter((o) => o.price > 0 && o.price < 1 && o.size > 0)
-      .sort((a, b) => a.price - b.price);
-    walked = walkAsks(asks, stake);
-  }
+  const asks = token ? await fetchAsks(token) : null;
+  const walked = asks ? walkAsks(asks, stake) : null;
   const price = walked?.avg ?? best;
   if (price == null) return null;
   const fee = feePerShare(rate, price);

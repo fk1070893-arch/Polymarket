@@ -2358,6 +2358,37 @@ button {
   width: 80px;
 }
 
+.review-filters {
+  justify-content: flex-start;
+  margin: 10px 0 14px;
+}
+
+.review-filters select {
+  max-width: 100%;
+}
+
+label.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.verdict h3 {
+  margin: 18px 0 6px;
+  font-size: 1rem;
+}
+
+.bt-table tr.active td {
+  background: var(--accent-soft);
+}
+
+.alert-move .depth {
+  display: block;
+  margin-top: 4px;
+}
+
 @media (max-width: 640px) {
   .review-stats {
     grid-template-columns: 1fr 1fr;

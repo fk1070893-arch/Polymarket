@@ -9,15 +9,19 @@
 // sinon celui du wallet suspect plus les frais du marché (impossible à avoir
 // en vrai : c'est le cas le plus favorable, signalé comme tel). Revente au
 // meilleur prix acheteur, frais déduits.
+// Parts disponibles : la première fois que le site voit une alerte, il lit
+// le carnet d'ordres de l'issue (parts au meilleur prix, au prix du wallet
+// ou moins cher, et jusqu'à 5 ¢ au-dessus), gardé dans la mémoire.
 // Résultat : site/data/alerts-review.json
 //
 // Usage : node scripts/build-alerts-review.mjs (après build-alerts et build-copy)
 
 import { normalizeMarket, winnerIndex } from "../site/js/normalize.js";
-import { readData, readState, writeData } from "./lib.mjs";
-import { feePerShare, feeRate, fetchMarketsByCondition } from "./paper.mjs";
+import { loadState, mapLimit, readData, readState, writeState } from "./lib.mjs";
+import { bookDepth, feePerShare, feeRate, fetchMarketsByCondition } from "./paper.mjs";
 
 const HOUR = 3600000;
+const MAX_DEPTH_PER_RUN = 80; // lectures de carnet d'ordres par passage
 const WINDOWS = { "24h": 24 * HOUR, "7j": 7 * 24 * HOUR };
 const BUCKETS = [
   { key: "70", label: "Score 70 et plus", min: 70 },
@@ -65,6 +69,16 @@ try {
   const recent = alerts.filter((a) => a.conditionId && now - a.ts * 1000 < WINDOWS["7j"]);
   const markets = await fetchMarketsByCondition([...new Set(recent.map((a) => a.conditionId))]);
 
+  // Carnet d'ordres au moment où le site voit l'alerte (une seule fois)
+  const prevState = (await loadState("alerts-review")) ?? {};
+  const keepIds = new Set(recent.map((a) => a.id));
+  const depth = Object.fromEntries(Object.entries(prevState.depth ?? {}).filter(([id]) => keepIds.has(id)));
+  const todo = recent.filter((a) => !depth[a.id] && markets.get(a.conditionId)).slice(0, MAX_DEPTH_PER_RUN);
+  await mapLimit(todo, 6, async (a) => {
+    const d = await bookDepth(markets.get(a.conditionId), a.outcomeIndex, a.price > 0 ? a.price : null).catch(() => null);
+    if (d) depth[a.id] = { ...d, seenAt: now };
+  });
+
   const rows = recent.map((a) => {
     const raw = markets.get(a.conditionId);
     const side = a.outcomeIndex;
@@ -81,6 +95,10 @@ try {
       conditionId: a.conditionId,
       outcome: a.outcome,
       cash: a.cash,
+      price: a.price,
+      small: a.small === true,
+      tags: (a.tags ?? []).slice(0, 8),
+      depth: depth[a.id] ? { ...depth[a.id], late: Math.round((depth[a.id].seenAt - a.ts * 1000) / 60000) } : null,
       entry,
       priceSource: cost != null ? "copie" : "wallet",
     };
@@ -102,11 +120,12 @@ try {
       byScore: BUCKETS.map((b) => ({ ...b, ...summarize(inWindow.filter((r) => r.score >= b.min && (b.max == null || r.score < b.max))) })),
     };
   }
-  out.rows = rows.sort((a, b) => b.ts - a.ts).slice(0, 400);
+  out.rows = rows.sort((a, b) => b.ts - a.ts).slice(0, 400).map(({ depth: d, ...r }) => (d ? { ...r, depth: { ...d, seenAt: undefined } } : r));
   const d = out.windows["24h"];
   const p = (v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)} $`;
   console.log(`Alertes des dernières 24 h : ${d.n} (dont ${d.resolved} terminées, ${d.won} gagnées) → réalisé ${p(d.realized)}, en cours ${p(d.unrealized)}, total ${p(d.total)} pour ${d.n} $ misés`);
-  await writeData("alerts-review.json", out);
+  console.log(`Carnets d'ordres lus pour ${todo.length} nouvelle(s) alerte(s) (${Object.keys(depth).length} en mémoire)`);
+  await writeState("alerts-review", { depth }, out);
 } catch (err) {
   console.log(`::warning::Bilan des alertes en échec : ${err.message}`);
 }

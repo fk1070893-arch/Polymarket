@@ -1,6 +1,6 @@
 // Onglet « Alertes » : paris suspects détectés par scripts/build-alerts.mjs
 
-import { changeBadge, duration, esc, pct, shortAddress, timeAgo, translateOutcome, usd0 } from "./format.js";
+import { cents, changeBadge, duration, esc, pct, shortAddress, timeAgo, translateOutcome, usd0 } from "./format.js";
 
 const GROUPS = [
   { key: "all", label: "Tout" },
@@ -13,7 +13,7 @@ const GROUPS = [
 
 const filter = { min: 50, sort: "recent", group: "all", size: "all" };
 // Bilan « si on avait suivi toutes les alertes »
-const review = { window: "24h", stake: 10 };
+const review = { window: "24h", stake: 10, min: 0, price: "all", size: "all", group: "all", buyable: false };
 let bound = false;
 
 const $ = (id) => document.getElementById(id);
@@ -56,25 +56,143 @@ function marketLine(a) {
 // Résultat de l'alerte si on l'avait suivie (voir le bilan en haut de l'onglet)
 function reviewLine(state, a) {
   const r = state.alertsReview?.rows?.find((x) => x.id === a.id);
-  if (!r || r.status === "unknown") return "";
-  const sp = `${r.roi >= 0 ? "+" : ""}${Math.round(r.roi * 100)} %`;
-  const txt = r.status === "won" ? `Gagné : ${sp}` : r.status === "lost" ? "Perdu" : `En cours : ${sp} si revendu maintenant`;
-  return ` <span class="flag ${r.roi >= 0 ? "good" : "alert"}">${txt}</span>`;
+  if (!r) return "";
+  let out = "";
+  if (r.status !== "unknown") {
+    const sp = `${r.roi >= 0 ? "+" : ""}${Math.round(r.roi * 100)} %`;
+    const txt = r.status === "won" ? `Gagné : ${sp}` : r.status === "lost" ? "Perdu" : `En cours : ${sp} si revendu maintenant`;
+    out += ` <span class="flag ${r.roi >= 0 ? "good" : "alert"}">${txt}</span>`;
+  }
+  return out + depthLine(r);
+}
+
+const int = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 0 });
+
+// Parts à vendre au moment où le site a vu l'alerte
+function depthLine(r) {
+  const d = r.depth;
+  if (!d) return "";
+  if (d.best == null) return `<span class="depth muted small">Aucune part à vendre quand le site a vu l'alerte</span>`;
+  const late = d.late > 90 ? ` · carnet lu ${duration(d.late * 60)} après l'alerte` : "";
+  const atWallet = d.atLimit != null && r.price > 0 ? ` · ${int.format(d.atLimit)} au prix du wallet (${cents(r.price)}) ou moins` : "";
+  return `<span class="depth muted small">Parts à vendre : <b>${int.format(d.atBest)}</b> à ${cents(d.best)}, ${int.format(d.within5)} jusqu'à ${cents(Math.min(0.99, d.best + 0.05))} (${money2.format(d.usd5)})${atWallet}${late}</span>`;
 }
 
 const money2 = new Intl.NumberFormat("fr-FR", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 const signedUsd = (v) => `${v >= 0 ? "+" : "−"}${money2.format(Math.abs(v))}`;
+const signedPct = (v) => `${v >= 0 ? "+" : ""}${Math.round(v * 100)} %`;
+
+const HOUR = 3600000;
+const WINDOW_MS = { "24h": 24 * HOUR, "7j": 7 * 24 * HOUR };
+const SCORES = [0, 50, 60, 70, 80, 90];
+const PRICES = {
+  all: { label: "Tous les prix", test: () => true },
+  low: { label: "Moins de 30 ¢", test: (r) => r.price < 0.3 },
+  mid: { label: "30 à 70 ¢", test: (r) => r.price >= 0.3 && r.price <= 0.7 },
+  high: { label: "Plus de 70 ¢", test: (r) => r.price > 0.7 },
+};
+const SIZES = {
+  all: { label: "Toutes les mises", min: 0 },
+  "1k": { label: "Mise du wallet ≥ 1 000 $", min: 1000 },
+  "5k": { label: "≥ 5 000 $", min: 5000 },
+  "20k": { label: "≥ 20 000 $", min: 20000 },
+};
+
+function rowsIn(data, win) {
+  const now = Date.now();
+  return (data.rows ?? []).filter((r) => now - r.ts * 1000 < WINDOW_MS[win]);
+}
+
+// Assez de parts à vendre (à 5 ¢ près du meilleur prix) pour la mise choisie
+const buyable = (r, stake) => r.depth?.best != null && r.depth.usd5 >= stake;
+
+function matches(r, f, stake) {
+  return (
+    r.score >= f.min &&
+    PRICES[f.price].test(r) &&
+    (r.cash ?? 0) >= SIZES[f.size].min &&
+    (f.group === "all" || groupOf(r) === f.group) &&
+    (!f.buyable || buyable(r, stake))
+  );
+}
+
+function sumUp(rows) {
+  const done = rows.filter((r) => r.status === "won" || r.status === "lost");
+  const open = rows.filter((r) => r.status === "open");
+  const realized = done.reduce((s, r) => s + r.roi, 0);
+  const unrealized = open.reduce((s, r) => s + r.roi, 0);
+  return {
+    n: rows.length,
+    resolved: done.length,
+    won: done.filter((r) => r.status === "won").length,
+    open: open.length,
+    realized,
+    unrealized,
+    total: realized + unrealized,
+    realPrice: rows.filter((r) => r.priceSource === "copie").length,
+    withDepth: rows.filter((r) => r.depth).length,
+  };
+}
+
+function filterLabel(f) {
+  const bits = [f.min ? `score ${f.min}+` : "tous les scores"];
+  if (f.price !== "all") bits.push(PRICES[f.price].label.toLowerCase());
+  if (f.size !== "all") bits.push(`mise du wallet ≥ ${int.format(SIZES[f.size].min)} $`);
+  if (f.group !== "all") bits.push(GROUPS.find((g) => g.key === f.group).label.toLowerCase());
+  if (f.buyable) bits.push("achetable");
+  return bits.join(" · ");
+}
+
+const MIN_N = 10; // en dessous, le résultat d'un filtre ne veut rien dire
+
+// Toutes les combinaisons de filtres, classées par gain moyen par alerte
+function bestFilters(data, stake) {
+  const rows = rowsIn(data, review.window);
+  const other = rowsIn(data, review.window === "24h" ? "7j" : "24h");
+  const out = [];
+  for (const min of SCORES)
+    for (const price of Object.keys(PRICES))
+      for (const size of Object.keys(SIZES))
+        for (const group of GROUPS.map((g) => g.key)) {
+          const f = { min, price, size, group, buyable: review.buyable };
+          const sel = rows.filter((r) => matches(r, f, stake));
+          if (sel.length < MIN_N) continue;
+          const s = sumUp(sel);
+          const o = sumUp(other.filter((r) => matches(r, f, stake)));
+          out.push({ f, s, avg: s.total / s.n, other: o });
+        }
+  // Une même sélection d'alertes peut sortir de plusieurs combinaisons : on
+  // garde la plus simple
+  const seen = new Set();
+  return out
+    .sort((a, b) => b.avg - a.avg || a.s.n - b.s.n)
+    .filter((x) => {
+      const k = `${x.s.n}:${x.s.total.toFixed(6)}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    })
+    .slice(0, 6);
+}
+
+function selectBox(id, options, value) {
+  return `<select id="${id}">${options.map(([k, l]) => `<option value="${k}"${String(k) === String(value) ? " selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
+}
 
 function renderReview(ctx) {
   const box = $("alerts-review");
   const data = ctx.state.alertsReview;
-  if (!data?.windows) {
+  if (!data?.rows) {
     box.innerHTML = "";
     return;
   }
-  const w = data.windows[review.window];
   const k = review.stake;
-  const pctOf = (v) => (w.n ? `${v >= 0 ? "+" : ""}${Math.round((v / w.n) * 100)} %` : "—");
+  const all = rowsIn(data, review.window);
+  const rows = all.filter((r) => matches(r, review, k));
+  const w = sumUp(rows);
+  const thresholds = SCORES.map((min) => ({ min, ...sumUp(all.filter((r) => matches(r, { ...review, min }, k))) }));
+  const best = bestFilters(data, k);
+  const otherLabel = review.window === "24h" ? "7 jours" : "24 h";
   box.innerHTML = `
     <section class="verdict live">
       <h2>Si on avait suivi toutes les alertes</h2>
@@ -87,32 +205,67 @@ function renderReview(ctx) {
         <label class="sort"><span>Mise par alerte</span>
           <span class="amount-input small"><input id="review-stake" type="number" min="1" step="1" value="${k}" inputmode="decimal" /><span>$</span></span></label>
       </div>
+      <nav class="chips" aria-label="Score minimum">
+        ${SCORES.map(
+          (min) =>
+            `<button type="button" class="chip${min === review.min ? " active" : ""}" data-review-min="${min}" aria-pressed="${min === review.min}">${min ? `Score ${min}+` : "Toutes"}</button>`
+        ).join("")}
+      </nav>
+      <div class="review-controls review-filters">
+        <label class="sort"><span>Prix</span>${selectBox("review-price", Object.entries(PRICES).map(([key, v]) => [key, v.label]), review.price)}</label>
+        <label class="sort"><span>Mise du wallet</span>${selectBox("review-size", Object.entries(SIZES).map(([key, v]) => [key, key === "all" ? v.label : `≥ ${int.format(v.min)} $`]), review.size)}</label>
+        <label class="sort"><span>Catégorie</span>${selectBox("review-group", GROUPS.map((g) => [g.key, g.label]), review.group)}</label>
+        <label class="check"><input id="review-buyable" type="checkbox"${review.buyable ? " checked" : ""} /> Seulement si assez de parts à vendre pour ma mise</label>
+      </div>
       ${
         w.n
           ? `<div class="pf-stats review-stats">
               <div class="stat"><span>Misé</span><strong>${money2.format(w.n * k)}</strong><em class="muted">${w.n} alertes</em></div>
               <div class="stat"><span>Gagné / perdu (terminées)</span><strong class="${w.realized >= 0 ? "up" : "down"}">${signedUsd(w.realized * k)}</strong><em class="muted">${w.resolved} terminées, ${w.won} gagnées</em></div>
               <div class="stat"><span>En cours, si revendu maintenant</span><strong class="${w.unrealized >= 0 ? "up" : "down"}">${signedUsd(w.unrealized * k)}</strong><em class="muted">${w.open} en cours</em></div>
-              <div class="stat big"><span>Total</span><strong class="${w.total >= 0 ? "up" : "down"}">${signedUsd(w.total * k)}</strong><em class="${w.total >= 0 ? "up" : "down"}">${pctOf(w.total)} de la mise</em></div>
-            </div>
-            <div class="table-wrap"><table class="bt-table">
-              <thead><tr><th>Alertes</th><th class="num">Nombre</th><th class="num">Terminées (gagnées)</th><th class="num">Total</th></tr></thead>
-              <tbody>${w.byScore
-                .filter((b) => b.n)
+              <div class="stat big"><span>Total</span><strong class="${w.total >= 0 ? "up" : "down"}">${signedUsd(w.total * k)}</strong><em class="${w.total >= 0 ? "up" : "down"}">${signedPct(w.total / w.n)} de la mise</em></div>
+            </div>`
+          : `<p>Aucune alerte avec ces filtres sur cette période.</p>`
+      }
+      <h3>Selon le score minimum suivi</h3>
+      <div class="table-wrap"><table class="bt-table">
+        <thead><tr><th>Alertes suivies</th><th class="num">Nombre</th><th class="num">Terminées (gagnées)</th><th class="num">Total</th></tr></thead>
+        <tbody>${thresholds
+          .map(
+            (t) => `<tr class="${t.min === review.min ? "active" : ""}"><td>${t.min ? `Score ${t.min} et plus` : "Toutes"}</td><td class="num">${t.n}</td><td class="num">${t.resolved} (${t.won})</td>
+              <td class="num ${t.total >= 0 ? "up" : "down"}">${t.n ? `${signedUsd(t.total * k)} <span class="ci">${signedPct(t.total / t.n)}</span>` : "—"}</td></tr>`
+          )
+          .join("")}</tbody>
+      </table></div>
+      <h3>Les filtres qui auraient le mieux marché</h3>
+      ${
+        best.length
+          ? `<div class="table-wrap"><table class="bt-table">
+              <thead><tr><th>Filtre</th><th class="num">Alertes</th><th class="num">Par alerte</th><th class="num">Total</th><th class="num">Même filtre sur ${otherLabel}</th><th></th></tr></thead>
+              <tbody>${best
                 .map(
-                  (b) => `<tr><td>${b.label}</td><td class="num">${b.n}</td><td class="num">${b.resolved} (${b.won})</td>
-                    <td class="num ${b.total >= 0 ? "up" : "down"}">${signedUsd(b.total * k)} <span class="ci">${b.total >= 0 ? "+" : ""}${Math.round((b.total / b.n) * 100)} %</span></td></tr>`
+                  (b, i) => `<tr><td>${esc(filterLabel(b.f))}</td><td class="num">${b.s.n} <span class="ci">${b.s.resolved} terminées</span></td>
+                    <td class="num ${b.avg >= 0 ? "up" : "down"}">${signedPct(b.avg)}</td>
+                    <td class="num ${b.s.total >= 0 ? "up" : "down"}">${signedUsd(b.s.total * k)}</td>
+                    <td class="num ${b.other.total >= 0 ? "up" : "down"}">${b.other.n ? `${signedPct(b.other.total / b.other.n)} <span class="ci">${b.other.n} alertes</span>` : "—"}</td>
+                    <td><button type="button" class="btn small" data-review-apply="${i}">Appliquer</button></td></tr>`
                 )
                 .join("")}</tbody>
             </table></div>
-            <p class="muted small">Prix d'achat : celui réellement obtenu par le test « copier les alertes » pour ${w.realPrice} alerte${w.realPrice > 1 ? "s" : ""} sur ${w.n}
-              (mise de 100 $, glissement et frais compris) ; pour les autres, celui payé par le wallet suspect plus les frais du marché, impossible à obtenir en le copiant (le résultat réel serait moins bon).
-              « Si revendu maintenant » utilise le meilleur prix d'achat actuel, frais déduits (sans le glissement à la revente). La plupart des marchés ne sont pas encore terminés : ce total bouge à chaque actualisation.
-              Mis à jour ${timeAgo(new Date(data.updatedAt).getTime())}.</p>`
-          : `<p>Aucune alerte sur cette période.</p>`
+            <p class="muted small">Toutes les combinaisons (score × prix × mise du wallet × catégorie) sont essayées sur la période choisie, avec au moins ${MIN_N} alertes chacune.
+              Attention : le meilleur filtre sur une période est souvent de la chance (on en essaie des centaines). Regarde la colonne « même filtre sur ${otherLabel} » :
+              un filtre qui ne tient que sur une période ne vaut rien. Et la plupart de ces marchés ne sont pas terminés.</p>`
+          : `<p class="muted small">Pas assez d'alertes (au moins ${MIN_N} par filtre) pour comparer des filtres.</p>`
       }
+      <p class="muted small">Prix d'achat : celui réellement obtenu par le test « copier les alertes » pour ${w.realPrice} alerte${w.realPrice > 1 ? "s" : ""} sur ${w.n}
+        (mise de 100 $, glissement et frais compris) ; pour les autres, celui payé par le wallet suspect plus les frais du marché, impossible à obtenir en le copiant (le résultat réel serait moins bon).
+        « Si revendu maintenant » utilise le meilleur prix d'achat actuel, frais déduits (sans le glissement à la revente).
+        Parts à vendre : lues dans le carnet d'ordres quand le site voit l'alerte (${w.withDepth} alerte${w.withDepth > 1 ? "s" : ""} sur ${w.n} ; les plus anciennes n'en ont pas).
+        Mis à jour ${timeAgo(new Date(data.updatedAt).getTime())}.</p>
     </section>`;
+  bestCache = best;
 }
+let bestCache = [];
 
 function moveLine(a, now) {
   if (now == null) return `<span class="muted">Marché clôturé ou hors liste</span>`;
@@ -175,14 +328,24 @@ function bind(ctx) {
   });
   $("alerts-review").addEventListener("click", (e) => {
     const chip = e.target.closest("[data-review-window]");
-    if (!chip) return;
-    review.window = chip.dataset.reviewWindow;
+    const min = e.target.closest("[data-review-min]");
+    const apply = e.target.closest("[data-review-apply]");
+    if (chip) review.window = chip.dataset.reviewWindow;
+    else if (min) review.min = Number(min.dataset.reviewMin);
+    else if (apply) Object.assign(review, bestCache[Number(apply.dataset.reviewApply)]?.f ?? {});
+    else return;
     renderReview(ctx);
   });
   $("alerts-review").addEventListener("change", (e) => {
-    if (e.target.id !== "review-stake") return;
-    const v = Number(e.target.value);
-    if (v > 0) review.stake = v;
+    const t = e.target;
+    if (t.id === "review-stake") {
+      const v = Number(t.value);
+      if (v > 0) review.stake = v;
+    } else if (t.id === "review-price") review.price = t.value;
+    else if (t.id === "review-size") review.size = t.value;
+    else if (t.id === "review-group") review.group = t.value;
+    else if (t.id === "review-buyable") review.buyable = t.checked;
+    else return;
     renderReview(ctx);
   });
   $("alerts-sort").addEventListener("change", (e) => {
