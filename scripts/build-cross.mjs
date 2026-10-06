@@ -152,7 +152,6 @@ async function metaculus() {
     const out = [];
     let error = null;
     let read = 0;
-    let lastRows = [];
     for (let o = 0; o < 500; o += 100) {
       const data = await metaculusGet(url(o)).catch((err) => {
         error = err.message;
@@ -160,7 +159,6 @@ async function metaculus() {
       });
       const rows = data?.results ?? [];
       read += rows.length;
-      if (o === 0) lastRows = rows;
       for (const post of rows) {
         const p = metaculusProb(post);
         const q = post.question ?? post;
@@ -175,30 +173,13 @@ async function metaculus() {
       }
       if (rows.length < 100) break;
     }
-    // La liste peut renvoyer la prévision vide : on lit alors le détail des
-    // questions les plus suivies, une par une
-    if (read && out.length < 20 && url === urls[0]) {
-      const ids = [...new Set(lastRows.map((r) => r.id))].slice(0, 60);
-      let detailed = 0;
-      for (const id of ids) {
-        const post = await metaculusGet(`https://www.metaculus.com/api/posts/${id}/?with_cp=true`).catch(() => null);
-        if (!post) continue;
-        detailed++;
-        const p = metaculusProb(post);
-        const q = post.question ?? post;
-        if (p != null && !out.some((x) => x.id === post.id))
-          out.push({ id: post.id, text: post.title ?? q.title ?? "", p, end: parseTime(q.scheduled_resolve_time ?? q.scheduled_close_time), url: `https://www.metaculus.com/questions/${post.id}/` });
-        await new Promise((r) => setTimeout(r, 150));
-      }
-      console.log(`Metaculus : détail de ${detailed} questions lu, ${out.length} prévisions au total`);
-    }
     if (read) console.log(`Metaculus : ${read} questions lues, ${out.length} avec une prévision publique`);
     if (out.length) return { questions: out, status: `${out.length} questions avec une prévision` };
     if (error) console.log(`Metaculus : ${error}`);
   }
   return {
     questions: [],
-    status: METACULUS_TOKEN ? "API Metaculus indisponible (clé refusée ?)" : "clé Metaculus manquante (secret METACULUS_TOKEN) : comparaison désactivée",
+    status: METACULUS_TOKEN ? "Metaculus ne publie pas ses prévisions par son API pour ce compte : comparaison impossible pour l'instant" : "clé Metaculus manquante (secret METACULUS_TOKEN) : comparaison désactivée",
   };
 }
 
@@ -301,8 +282,12 @@ async function main(prev) {
   const settled = bets.filter((b) => b.won != null);
   console.log(`${added} nouveaux paris fictifs, ${bets.length - settled.length} en attente, ${settled.length} réglés`);
 
-  // Metaculus
-  const meta = await metaculus().catch((err) => ({ questions: [], status: `Metaculus indisponible (${err.message})` }));
+  // Metaculus : une fois par heure seulement (le site limite les requêtes),
+  // sinon on garde la dernière lecture
+  const hourly = new Date(now).getUTCMinutes() < 5 || !prev.metaculusQuestions;
+  const meta = hourly
+    ? await metaculus().catch((err) => ({ questions: [], status: `Metaculus indisponible (${err.message})` }))
+    : { questions: prev.metaculusQuestions ?? [], status: prev.metaculusStatus ?? "" };
   console.log(`Metaculus : ${meta.status}`);
   const metaPairs = [];
   for (const q of meta.questions) {
@@ -332,6 +317,7 @@ async function main(prev) {
     },
     kalshiStatus,
     metaculusStatus: meta.status,
+    metaculusQuestions: meta.questions,
     pmMarkets: pm.length,
     kalshiMarkets: kalshi.length,
     pairs: pairs.sort(byGap).slice(0, 60),
