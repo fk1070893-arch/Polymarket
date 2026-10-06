@@ -35,6 +35,9 @@ const RULE = {
 // Marchés sport qui se terminent dans la fenêtre
 async function candidates(now) {
   const out = [];
+  // Décompte de chaque filtre, pour vérifier dans les logs que la règle
+  // trouve bien des marchés
+  const seen = { events: 0, sport: 0, binary: 0, volume: 0, window: 0 };
   for (let page = 0; page < 5; page++) {
     const params = new URLSearchParams({
       tag_slug: "sports",
@@ -47,21 +50,31 @@ async function candidates(now) {
     });
     const batch = await getJSON(`${GAMMA}/events?${params}`);
     for (const ev of batch) {
+      seen.events++;
       const tags = (ev.tags ?? []).map((t) => t.slug).filter(Boolean);
       if (groupOf(tags) !== "sport") continue;
+      seen.sport++;
       for (const raw of ev.markets ?? []) {
         const m = normalizeMarket(raw);
         if (m.closed || !m.active || m.outcomes.length !== 2 || m.prices.length !== 2) continue;
-        if (NOISE.test(m.question) || m.volume < MIN_VOLUME) continue;
+        if (NOISE.test(m.question)) continue;
+        seen.binary++;
+        if (m.volume < MIN_VOLUME) continue;
+        seen.volume++;
         const end = parseTime(raw.endDate) ?? parseTime(ev.endDate);
         if (end == null) continue;
         const left = end - now;
         if (left < WINDOW[0] || left > WINDOW[1]) continue;
+        seen.window++;
         out.push({ ev, raw, m, end });
       }
     }
     if (batch.length < 100) break;
   }
+  console.log(
+    `Filtres : ${seen.events} événements, ${seen.sport} sport, ${seen.binary} marchés à deux issues, ` +
+      `${seen.volume} avec assez de volume, ${seen.window} dans la fenêtre 20-28 h`
+  );
   return out;
 }
 
