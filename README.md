@@ -76,7 +76,7 @@ Dans chaque fiche de marché, le bloc **Ma prédiction** permet d'acheter des pa
 navigateur ──► API Polymarket (direct)          ✔ badge « En direct »
      │
      └─ si injoignable ──► data/events.json      ✔ badge « Instantané »
-                           (généré toutes les 15 min par la GitHub Action)
+                           (généré toutes les 5 min par la GitHub Action) 
 ```
 
 La GitHub Action génère six fichiers à chaque passage :
@@ -143,6 +143,6 @@ npm start          # sert le dossier site/ sur http://localhost:3000
 | `scripts/build-copy.mjs` | Copier les alertes → `copy.json` |
 | `scripts/odds-lib.mjs`, `scripts/build-odds.mjs` | Bookmakers → `odds.json` |
 | `scripts/arb-lib.mjs`, `scripts/build-arbs.mjs` | Anomalies de prix → `arbs.json` |
-| `.github/workflows/pages.yml` | Instantané + déploiement toutes les 15 min |
+| `.github/workflows/pages.yml` | Instantané + déploiement toutes les 5 min |
 
 Les probabilités sont les prix du marché, pas des certitudes. Données publiques de Polymarket, à titre informatif uniquement.
