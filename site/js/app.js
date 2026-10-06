@@ -450,7 +450,7 @@ function tradePanel(ev, market, pick) {
     <div class="amount">
       <label for="trade-amount">Mise</label>
       <div class="amount-input"><input id="trade-amount" type="number" min="1" step="1" inputmode="decimal" value="${Math.min(50, Math.floor(cash)) || ""}" /><span>$</span></div>
-      <div class="quick">${[10, 50, 100, 250].map((v) => `<button type="button" data-amount="${v}">${v}</button>`).join("")}</div>
+      <div class="quick">${[50, 100, 250, 500, 1000].map((v) => `<button type="button" data-amount="${v}">${v}</button>`).join("")}</div>
     </div>
     <p class="trade-summary" id="trade-summary"></p>
     <button type="button" class="btn primary" id="trade-go" disabled>Valider la prédiction</button>

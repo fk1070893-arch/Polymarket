@@ -107,7 +107,7 @@ function bind(ctx) {
       return;
     }
     if (e.target.closest("#pf-reset")) {
-      if (!confirm("Tout effacer et repartir avec 1 000 $ fictifs ? (pense à exporter avant si tu veux garder une trace)")) return;
+      if (!confirm(`Tout effacer et repartir avec ${money.format(START_CASH)} fictifs ? (pense à exporter avant si tu veux garder une trace)`)) return;
       state.portfolio = resetPortfolio();
       ctx.toast("Portefeuille remis à zéro.");
       renderPortfolio(ctx);

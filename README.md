@@ -84,7 +84,7 @@ Le backtest compte lui aussi l'écart achat-vente : il est mesuré sur les march
 
 ### Portefeuille fictif
 
-Dans chaque fiche de marché, le bloc **Ma prédiction** permet d'acheter des parts avec 1 000 $ fictifs, au prix du marché. Une part vaut 1 $ si l'issue gagne, 0 sinon. L'onglet **Mon portefeuille** suit la valeur des prédictions, les règle automatiquement quand le marché se termine, et compare ton taux de réussite à celui attendu par le marché (« est-ce que tu bats le marché ? »). Les données restent dans le navigateur (export / import en JSON).
+Dans chaque fiche de marché, le bloc **Ma prédiction** permet d'acheter des parts avec 5 000 $ fictifs, au prix du marché. Une part vaut 1 $ si l'issue gagne, 0 sinon. L'onglet **Mon portefeuille** suit la valeur des prédictions, les règle automatiquement quand le marché se termine, et compare ton taux de réussite à celui attendu par le marché (« est-ce que tu bats le marché ? »). Les données restent dans le navigateur (export / import en JSON).
 
 ## Comment ça marche
 

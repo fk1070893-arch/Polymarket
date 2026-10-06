@@ -3,10 +3,22 @@
 // exactement comme sur Polymarket. Tout est stocké dans le navigateur.
 
 const KEY = "pm-portfolio";
-export const START_CASH = 1000;
+export const START_CASH = 5000;
+const OLD_START_CASH = 1000; // cagnotte de départ avant octobre 2026
 
 function fresh() {
-  return { version: 1, cash: START_CASH, startedAt: Date.now(), positions: [] };
+  return { version: 2, start: START_CASH, cash: START_CASH, startedAt: Date.now(), positions: [] };
+}
+
+// Portefeuilles créés avec l'ancienne cagnotte de 1 000 $ : on ajoute la
+// différence au solde disponible, sans toucher aux prédictions en cours
+function upgrade(p) {
+  if (p.start == null) {
+    p.cash += START_CASH - OLD_START_CASH;
+    p.start = START_CASH;
+    p.version = 2;
+  }
+  return p;
 }
 
 function valid(p) {
@@ -16,7 +28,10 @@ function valid(p) {
 export function loadPortfolio() {
   try {
     const p = JSON.parse(localStorage.getItem(KEY) ?? "null");
-    if (valid(p)) return p;
+    if (valid(p)) {
+      if (p.start == null) savePortfolio(upgrade(p));
+      return p;
+    }
   } catch {
     // stockage indisponible ou données corrompues
   }
@@ -115,8 +130,8 @@ export function stats(p, priceOf) {
     cash: p.cash,
     openValue,
     total,
-    pnl: total - START_CASH,
-    roi: (total - START_CASH) / START_CASH,
+    pnl: total - (p.start ?? START_CASH),
+    roi: (total - (p.start ?? START_CASH)) / (p.start ?? START_CASH),
     openCount: open.length,
     resolvedCount: n,
     wins,
@@ -133,6 +148,7 @@ export function exportPortfolio(p) {
 export function importPortfolio(text) {
   const p = JSON.parse(text);
   if (!valid(p)) throw new Error("Fichier de portefeuille invalide");
+  upgrade(p);
   savePortfolio(p);
   return p;
 }
