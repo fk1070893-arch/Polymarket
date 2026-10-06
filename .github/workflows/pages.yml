@@ -83,7 +83,7 @@ jobs:
       - name: Anomalies de prix (issues exclusives)
         run: node scripts/build-arbs.mjs
         continue-on-error: true
-        timeout-minutes: 5
+        timeout-minutes: 6
         env:
           PAGES_URL: ${{ steps.pages.outputs.base_url }}
 

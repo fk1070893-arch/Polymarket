@@ -72,3 +72,51 @@ export async function writeState(name, state, view) {
   await writeData(`${name}-state.json`, state);
   await writeData(`${name}.json`, view);
 }
+
+// Tous les événements Gamma dont la fin prévue tombe entre `from` et `to`
+// (ms). L'API refuse d'aller au-delà d'environ 2 000 résultats par requête :
+// on vérifie d'abord si la période en contient plus (une requête d'un seul
+// résultat, loin dans la liste) et, si oui, on la coupe en deux. Les pages
+// sont lues par 4 en parallèle. `params` : filtres Gamma (active, tag_slug…).
+// `deadline` (ms) : au-delà, on s'arrête avec ce qui a été lu.
+const GAMMA_EVENTS = "https://gamma-api.polymarket.com/events";
+const MAX_OFFSET = 1800;
+const PAGE = 100;
+
+function eventsUrl(params, from, to, offset, limit = PAGE) {
+  const qs = new URLSearchParams({
+    ...params,
+    end_date_min: new Date(from).toISOString(),
+    end_date_max: new Date(to).toISOString(),
+    limit: String(limit),
+    offset: String(offset),
+  });
+  return `${GAMMA_EVENTS}?${qs}`;
+}
+
+export async function eventsBetween(params, from, to, { deadline = Infinity, depth = 0 } = {}) {
+  if (Date.now() > deadline) return [];
+  if (depth < 14 && to - from >= 3600000) {
+    const probe = await getJSON(eventsUrl(params, from, to, MAX_OFFSET, 1));
+    if (probe.length) {
+      const mid = Math.floor(from + (to - from) / 2);
+      const opts = { deadline, depth: depth + 1 };
+      return [...(await eventsBetween(params, from, mid, opts)), ...(await eventsBetween(params, mid, to, opts))];
+    }
+  }
+  const out = [];
+  for (let offset = 0; offset <= MAX_OFFSET; offset += 4 * PAGE) {
+    const offsets = [0, 1, 2, 3].map((k) => offset + k * PAGE).filter((o) => o <= MAX_OFFSET);
+    const pages = await Promise.all(offsets.map((o) => getJSON(eventsUrl(params, from, to, o))));
+    for (const p of pages) out.push(...p);
+    if (pages.some((p) => p.length < PAGE)) break;
+  }
+  return out;
+}
+
+// Même chose, sans doublons (un événement à cheval sur deux périodes)
+export async function allEventsBetween(params, from, to, opts = {}) {
+  const seen = new Map();
+  for (const ev of await eventsBetween(params, from, to, opts)) seen.set(String(ev.id), ev);
+  return [...seen.values()];
+}

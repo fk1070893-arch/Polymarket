@@ -14,10 +14,9 @@
 // le mois : une ligue est rafraîchie à la fois.
 // Résultat : site/data/odds.json
 
-import { GAMMA } from "../site/js/api.js";
 import { normalizeMarket } from "../site/js/normalize.js";
 import { parseTime } from "./backtest-lib.mjs";
-import { getJSON, loadState, writeState } from "./lib.mjs";
+import { allEventsBetween, loadState, writeState } from "./lib.mjs";
 import { gameProbs, marketTargets, sameGame, sideProbs } from "./odds-lib.mjs";
 import { askPrices, paperStats, pnlCurve, settleBets } from "./paper.mjs";
 
@@ -131,24 +130,9 @@ async function refreshOdds(state, now) {
   return `${pick.k} : ${cache[pick.k].games.length} matchs (${state.quota.remaining} requêtes restantes)`;
 }
 
-// Événements sport Polymarket des 3 prochains jours
+// Tous les événements sport Polymarket des 4 prochains jours
 async function polyGames(now) {
-  const out = [];
-  for (let page = 0; page < 12; page++) {
-    const params = new URLSearchParams({
-      tag_slug: "sports",
-      active: "true",
-      closed: "false",
-      end_date_min: new Date(now).toISOString(),
-      end_date_max: new Date(now + 4 * DAY).toISOString(),
-      limit: "100",
-      offset: String(page * 100),
-    });
-    const batch = await getJSON(`${GAMMA}/events?${params}`);
-    out.push(...batch);
-    if (batch.length < 100) break;
-  }
-  return out;
+  return allEventsBetween({ tag_slug: "sports", active: "true", closed: "false" }, now, now + 4 * DAY);
 }
 
 function compare(state, events, now) {

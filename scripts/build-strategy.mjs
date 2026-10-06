@@ -29,10 +29,9 @@
 //
 // Usage : node scripts/build-strategy.mjs
 
-import { GAMMA } from "../site/js/api.js";
 import { normalizeMarket } from "../site/js/normalize.js";
 import { groupOf, parseTime } from "./backtest-lib.mjs";
-import { getJSON, loadPrevious, loadState, writeState } from "./lib.mjs";
+import { allEventsBetween, loadPrevious, loadState, writeState } from "./lib.mjs";
 import { askPrices, median, paperStats, pnlCurve, settleBets, spreadOf } from "./paper.mjs";
 
 const HOUR = 3600000;
@@ -62,38 +61,30 @@ async function candidates(now, key) {
   // Décompte de chaque filtre, pour vérifier dans les logs que la règle
   // trouve bien des marchés
   const seen = { events: 0, sport: 0, binary: 0, volume: 0, window: 0, quoted: 0 };
-  for (let page = 0; page < 5; page++) {
-    const params = new URLSearchParams({
-      tag_slug: "sports",
-      active: "true",
-      closed: "false",
-      end_date_min: new Date(now + WINDOW[0] - 6 * HOUR).toISOString(),
-      end_date_max: new Date(now + WINDOW[1] + 6 * HOUR).toISOString(),
-      limit: "100",
-      offset: String(page * 100),
-    });
-    const batch = await getJSON(`${GAMMA}/events?${params}`);
-    for (const ev of batch) {
-      seen.events++;
-      const tags = (ev.tags ?? []).map((t) => t.slug).filter(Boolean);
-      if (groupOf(tags) !== "sport") continue;
-      seen.sport++;
-      for (const raw of ev.markets ?? []) {
-        const m = normalizeMarket(raw);
-        if (m.closed || !m.active || m.outcomes.length !== 2 || m.prices.length !== 2) continue;
-        if (NOISE.test(m.question)) continue;
-        seen.binary++;
-        if (m.volume >= MIN_VOLUME) seen.volume++;
-        const end = parseTime(raw.endDate) ?? parseTime(ev.endDate);
-        if (end == null) continue;
-        const left = end - now;
-        if (left < WINDOW[0] || left > WINDOW[1]) continue;
-        seen.window++;
-        if (askPrices(raw)[1] != null) seen.quoted++;
-        out.push({ ev, raw, m, end });
-      }
+  const events = await allEventsBetween(
+    { tag_slug: "sports", active: "true", closed: "false" },
+    now + WINDOW[0] - 6 * HOUR,
+    now + WINDOW[1] + 6 * HOUR
+  );
+  for (const ev of events) {
+    seen.events++;
+    const tags = (ev.tags ?? []).map((t) => t.slug).filter(Boolean);
+    if (groupOf(tags) !== "sport") continue;
+    seen.sport++;
+    for (const raw of ev.markets ?? []) {
+      const m = normalizeMarket(raw);
+      if (m.closed || !m.active || m.outcomes.length !== 2 || m.prices.length !== 2) continue;
+      if (NOISE.test(m.question)) continue;
+      seen.binary++;
+      if (m.volume >= MIN_VOLUME) seen.volume++;
+      const end = parseTime(raw.endDate) ?? parseTime(ev.endDate);
+      if (end == null) continue;
+      const left = end - now;
+      if (left < WINDOW[0] || left > WINDOW[1]) continue;
+      seen.window++;
+      if (askPrices(raw)[1] != null) seen.quoted++;
+      out.push({ ev, raw, m, end });
     }
-    if (batch.length < 100) break;
   }
   console.log(
     `Filtres : ${seen.events} événements, ${seen.sport} sport, ${seen.binary} marchés à deux issues, ` +

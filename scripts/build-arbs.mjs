@@ -8,38 +8,29 @@
 //
 // Usage : node scripts/build-arbs.mjs
 
-import { CLOB, GAMMA } from "../site/js/api.js";
+import { CLOB } from "../site/js/api.js";
 import { asksOf, eventPrices, walkBooks } from "./arb-lib.mjs";
 import { parseTime } from "./backtest-lib.mjs";
-import { getJSON, loadPrevious, mapLimit, writeData } from "./lib.mjs";
+import { allEventsBetween, getJSON, loadPrevious, mapLimit, writeData } from "./lib.mjs";
 
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
-const PAGES = 5; // 500 événements les plus actifs
 const MIN_EDGE = 0.005; // écart minimum (prix affichés) pour vérifier les carnets
-const MAX_CHECK = 25; // événements vérifiés dans les carnets à chaque passage
+const MAX_CHECK = 40; // événements vérifiés dans les carnets à chaque passage
 const MAX_LEGS = 40;
 const KEEP_HISTORY = 30 * DAY;
 const MIN_MARGIN = 0.005; // chaque lot doit rapporter au moins 0,5 % de sa mise
 const MIN_PROFIT = 1; // et l'ensemble au moins 1 $
 
-async function openEvents() {
-  const out = [];
-  for (let page = 0; page < PAGES; page++) {
-    const params = new URLSearchParams({
-      active: "true",
-      closed: "false",
-      archived: "false",
-      order: "volume24hr",
-      ascending: "false",
-      limit: "100",
-      offset: String(page * 100),
-    });
-    const batch = await getJSON(`${GAMMA}/events?${params}`);
-    out.push(...batch);
-    if (batch.length < 100) break;
-  }
-  return out;
+// Tous les événements ouverts, pas seulement les plus actifs : c'est sur les
+// petits événements, peu surveillés, que les écarts durent le plus.
+async function openEvents(now) {
+  const t = Date.now();
+  // Au plus 3 minutes de lecture, pour laisser passer les autres étapes
+  const deadline = t + 3 * 60000;
+  const events = await allEventsBetween({ active: "true", closed: "false", archived: "false" }, now - 30 * DAY, now + 5 * 365 * DAY, { deadline });
+  console.log(`${events.length} événements ouverts lus en ${Math.round((Date.now() - t) / 1000)} s${Date.now() > deadline ? " (lecture interrompue : limite de temps)" : ""}`);
+  return events;
 }
 
 async function book(tokenId) {
@@ -57,7 +48,7 @@ async function check(c) {
 
 async function main(prev) {
   const now = Date.now();
-  const events = await openEvents();
+  const events = await openEvents(now);
   const candidates = [];
   let negRisk = 0;
   for (const ev of events) {
