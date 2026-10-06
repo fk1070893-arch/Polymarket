@@ -78,6 +78,8 @@ async function main(prev, alerts) {
       cost,
       best: rc.best,
       fee: rc.fee,
+      ladder: rc.ladder ?? null,
+      hold: rc.hold ?? 0,
       slippage: rc.slippage,
       filled: rc.filled,
       mid: m.prices[a.outcomeIndex] ?? null,

@@ -29,10 +29,23 @@ try {
   const slim = events.map((ev) => ({
     ...pick(ev, EVENT_FIELDS),
     tags: (ev.tags ?? []).map((t) => ({ slug: t.slug, label: t.label })).filter((t) => t.slug),
-    markets: (ev.markets ?? []).map((m) => pick(m, MARKET_FIELDS)),
+    // Récompense de détention : champ non documenté, gardé s'il existe (sur
+    // le marché ou l'événement)
+    markets: (ev.markets ?? []).map((m) => {
+      const out = pick(m, MARKET_FIELDS);
+      for (const o of [ev, m]) for (const k of Object.keys(o)) if (/holding/i.test(k) && o[k] != null && o[k] !== false) out[k] = o[k];
+      return out;
+    }),
   }));
   await writeCache("universe.json", { readAt: now, complete: Date.now() < started + 3 * 60000, events: slim });
   const markets = slim.reduce((s, ev) => s + ev.markets.length, 0);
+  // Champs « récompense » présents dans les données brutes (pour repérer
+  // la récompense de détention, non documentée)
+  const rewardKeys = {};
+  for (const ev of events)
+    for (const o of [ev, ...(ev.markets ?? [])])
+      for (const [k, v] of Object.entries(o)) if (/holding|reward|yield|apy/i.test(k) && v != null && v !== false && v !== 0 && v !== "0") rewardKeys[k] = (rewardKeys[k] ?? 0) + 1;
+  console.log(`Champs de récompense trouvés : ${Object.entries(rewardKeys).map(([k, n]) => `${k} × ${n}`).join(", ") || "aucun"}`);
   const fees = { enabled: 0, rates: {} };
   for (const ev of slim)
     for (const m of ev.markets) {

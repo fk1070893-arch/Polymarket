@@ -18,7 +18,7 @@
 
 import { normalizeMarket, payoutOf } from "../site/js/normalize.js";
 import { loadState, mapLimit, readData, readState, writeState } from "./lib.mjs";
-import { bookDepth, feeParams, feePerShare, fetchMarketsByCondition } from "./paper.mjs";
+import { STAKE, bookDepth, feeParams, feePerShare, fetchMarketsByCondition, sellValue } from "./paper.mjs";
 
 const HOUR = 3600000;
 const MAX_DEPTH_PER_RUN = 80; // lectures de carnet d'ordres par passage
@@ -47,6 +47,8 @@ function summarize(rows) {
   const open = rows.filter((r) => r.status === "open");
   const realized = done.reduce((s, r) => s + r.roi, 0);
   const unrealized = open.reduce((s, r) => s + r.roi, 0);
+  // Sans le glissement à la revente (meilleur prix acheteur seulement)
+  const unrealizedBest = open.reduce((s, r) => s + (r.roiBest ?? r.roi), 0);
   return {
     n: rows.length,
     resolved: done.length,
@@ -55,6 +57,7 @@ function summarize(rows) {
     unknown: rows.filter((r) => r.status === "unknown").length,
     realized,
     unrealized,
+    unrealizedBest,
     total: realized + unrealized,
     // Part des alertes au prix réellement obtenu par le test de copie
     realPrice: rows.filter((r) => r.priceSource === "copie").length,
@@ -80,7 +83,7 @@ try {
     if (d) depth[a.id] = { ...d, seenAt: now };
   });
 
-  const rows = recent.map((a) => {
+  const rows = await mapLimit(recent, 8, async (a) => {
     const raw = markets.get(a.conditionId);
     const side = a.outcomeIndex;
     const cost = copied.get(a.id);
@@ -117,8 +120,13 @@ try {
     if (pay != null) return { ...base, status: pay === 1 ? "won" : "lost", split: pay === 0.5 || undefined, roi: pay / entry - 1 };
     const bid = sellPrice(raw, side) ?? m.prices[side] ?? null;
     if (bid == null) return { ...base, status: "unknown", roi: 0 };
-    const sell = Math.max(0, bid - feePerShare(rate, bid));
-    return { ...base, status: "open", now: sell, roi: sell / entry - 1 };
+    // Revente au meilleur prix acheteur (frais déduits)…
+    const quick = Math.max(0, bid - feePerShare(rate, bid));
+    // …et, plus réaliste, en descendant chez les acheteurs suivants pour
+    // toutes les parts d'une mise de 100 $ (glissement à la revente)
+    const sv = await sellValue(raw, side, STAKE / entry).catch(() => null);
+    const sell = sv ? sv.net : quick;
+    return { ...base, status: "open", now: sell, nowBest: quick, roi: sell / entry - 1, roiBest: quick / entry - 1 };
   });
 
   const out = { updatedAt: new Date(now).toISOString(), windows: {} };

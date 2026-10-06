@@ -122,6 +122,7 @@ function sumUp(rows) {
   const open = rows.filter((r) => r.status === "open");
   const realized = done.reduce((s, r) => s + r.roi, 0);
   const unrealized = open.reduce((s, r) => s + r.roi, 0);
+  const unrealizedBest = open.reduce((s, r) => s + (r.roiBest ?? r.roi), 0);
   return {
     n: rows.length,
     resolved: done.length,
@@ -129,6 +130,7 @@ function sumUp(rows) {
     open: open.length,
     realized,
     unrealized,
+    unrealizedBest,
     total: realized + unrealized,
     realPrice: rows.filter((r) => r.priceSource === "copie").length,
     bookPrice: rows.filter((r) => r.priceSource === "carnet").length,
@@ -226,7 +228,9 @@ function renderReview(ctx) {
           ? `<div class="pf-stats review-stats">
               <div class="stat"><span>Misé</span><strong>${money2.format(w.n * k)}</strong><em class="muted">${w.n} alertes</em></div>
               <div class="stat"><span>Gagné / perdu (terminées)</span><strong class="${w.realized >= 0 ? "up" : "down"}">${signedUsd(w.realized * k)}</strong><em class="muted">${w.resolved} terminées, ${w.won} gagnées</em></div>
-              <div class="stat"><span>En cours, si revendu maintenant</span><strong class="${w.unrealized >= 0 ? "up" : "down"}">${signedUsd(w.unrealized * k)}</strong><em class="muted">${w.open} en cours</em></div>
+              <div class="stat"><span>En cours, si revendu maintenant</span><strong class="${w.unrealized >= 0 ? "up" : "down"}">${signedUsd(w.unrealized * k)}</strong><em class="muted">${w.open} en cours${
+                w.unrealizedBest - w.unrealized > 0.005 ? ` · dont ${money2.format((w.unrealizedBest - w.unrealized) * k)} perdus en glissement à la revente` : ""
+              }</em></div>
               <div class="stat big"><span>Total</span><strong class="${w.total >= 0 ? "up" : "down"}">${signedUsd(w.total * k)}</strong><em class="${w.total >= 0 ? "up" : "down"}">${signedPct(w.total / w.n)} de la mise</em></div>
             </div>`
           : `<p>Aucune alerte avec ces filtres sur cette période.</p>`
@@ -264,7 +268,7 @@ function renderReview(ctx) {
       <p class="muted small">Prix d'achat, pour une mise de 100 $ avec glissement et frais : celui obtenu par le test « copier les alertes » (${w.realPrice} alerte${w.realPrice > 1 ? "s" : ""}),
         sinon celui du carnet d'ordres lu par le site dans la demi-heure après l'alerte (${w.bookPrice}). Pour les ${w.n - w.realPrice - w.bookPrice} autres, celui payé par le wallet suspect plus les frais, impossible à obtenir en le copiant (résultat trop beau).
         Marché annulé (réglé 50/50) : 0,50 $ par part.
-        « Si revendu maintenant » utilise le meilleur prix d'achat actuel, frais déduits (sans le glissement à la revente).
+        « Si revendu maintenant » : revente de toutes les parts d'une mise de 100 $ aux acheteurs du carnet d'ordres (glissement compris), frais déduits.
         Parts à vendre : lues dans le carnet d'ordres quand le site voit l'alerte (${w.withDepth} alerte${w.withDepth > 1 ? "s" : ""} sur ${w.n} ; les plus anciennes n'en ont pas).
         Mis à jour ${timeAgo(new Date(data.updatedAt).getTime())}.</p>
     </section>`;

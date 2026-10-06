@@ -193,6 +193,8 @@ async function main(prev) {
         cost,
         best: rc?.best ?? null,
         fee: rc?.fee ?? 0,
+        ladder: rc?.ladder ?? null,
+        hold: rc?.hold ?? 0,
         slippage: rc?.slippage ?? null,
         filled: rc?.filled ?? null,
         cap,

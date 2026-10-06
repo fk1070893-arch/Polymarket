@@ -283,3 +283,19 @@ test("frais de secours d'après la catégorie", async () => {
   assert.equal(feeForTags(["politics", "geopolitics"]), null);
   assert.deepEqual(feeForTags(["crypto"]), { rate: 0.07, exp: 1 });
 });
+
+test("réalisme : argent bloqué, récompense, mises plus grosses", () => {
+  const D = 86400000;
+  const bets = [
+    { won: true, roi: 1, cost: 0.5, mid: 0.5, placedAt: 0, resolvedAt: 10 * D, hold: 0.04, ladder: [0.5, 0.55, 0.6, null] },
+    { won: false, roi: -1, cost: 0.5, placedAt: 0, resolvedAt: 10 * D, hold: 0, ladder: [0.5, 0.55, null, null] },
+  ];
+  const s = paperStats(bets);
+  close(s.avgDays, 10);
+  // gain 0 sur 20 jours-dollars : 0 %/an
+  close(s.perYear, 0);
+  close(s.rewards, 0.04 * 10 / 365);
+  close(s.ladder[1].roi, (1 / 0.55 - 1 - 1) / 2);
+  assert.equal(s.ladder[2].n, 1);
+  assert.equal(s.ladder[2].refused, 1);
+});

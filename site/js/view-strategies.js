@@ -33,7 +33,30 @@ function verdict(s) {
     Gain moyen <b>au prix réellement payé</b> <span class="muted small">(mise de 100 $ : écart achat-vente, glissement et frais compris)</span> : <b class="${cls(s.roi)}">${sp(s.roi)}</b> par pari${s.ci ? `, marge d'erreur ${ciText(s.ci)}` : ""}
     (${pnl >= 0 ? "+" : "−"}${money.format(Math.abs(pnl))} pour ${n} $ misés)${
       s.roiMid != null ? `. Au prix affiché, ç'aurait été ${sp(s.roiMid)}` : ""
-    }.</p><p>${line}</p>`;
+    }.</p><p>${line}</p>${realism(s)}`;
+}
+
+const int0 = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 0 });
+
+// Ce que le gain par pari ne dit pas (voir realism() dans scripts/paper.mjs)
+function realism(s) {
+  if (s.avgDays == null) return "";
+  const bits = [];
+  bits.push(
+    `<li>Argent bloqué en moyenne <b>${duration(s.avgDays * 86400)}</b> par pari, jusqu'à la fin du marché : ramené à un an, le rendement est de <b class="${cls(s.perYear)}">${sp(s.perYear)}</b> <span class="muted small">(sans réinvestir les gains)</span>.</li>`
+  );
+  if (s.withHold)
+    bits.push(
+      `<li>Récompense de détention de Polymarket (environ 4 %/an sur certains marchés) : <b class="up">+${money.format(s.rewards)}</b> sur ${s.withHold} pari${s.withHold > 1 ? "s" : ""}, soit ${sp(s.roiWithRewards)} par pari avec elle.</li>`
+    );
+  const lad = (s.ladder ?? []).filter((l) => l.n);
+  if (lad.length)
+    bits.push(
+      `<li>Avec une mise plus grosse, notre propre achat fait monter le prix (on vide les meilleures offres) : ${lad
+        .map((l) => `${int0.format(l.stake)} $ → <b class="${cls(l.roi)}">${sp(l.roi)}</b>${l.refused ? ` <span class="muted small">(${l.refused} pari${l.refused > 1 ? "s" : ""} impossible${l.refused > 1 ? "s" : ""} faute de vendeurs)</span>` : ""}`)
+        .join(" · ")} <span class="muted small">(sur ${lad[0].n} paris dont le carnet a été lu)</span>.</li>`
+    );
+  return `<ul class="realism small">${bits.join("")}</ul>`;
 }
 
 function stats(s, extra = "") {

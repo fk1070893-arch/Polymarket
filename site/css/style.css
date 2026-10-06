@@ -2394,3 +2394,17 @@ label.check {
     grid-template-columns: 1fr 1fr;
   }
 }
+
+.realism {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+}
+
+.realism li {
+  margin: 3px 0;
+}
+
+.realism b:not(.up):not(.down) {
+  color: var(--text);
+}

@@ -54,13 +54,66 @@ function tokenIds(raw) {
 
 // Offres de vente d'une issue, de la moins chère à la plus chère (null si
 // le carnet d'ordres ne répond pas)
-async function fetchAsks(token) {
+async function fetchBook(token) {
   const book = await getJSON(`${CLOB}/book?token_id=${encodeURIComponent(token)}`, 2).catch(() => null);
   if (!book) return null;
-  return (book.asks ?? [])
-    .map((o) => ({ price: num(o.price), size: num(o.size) }))
-    .filter((o) => o.price > 0 && o.price < 1 && o.size > 0)
-    .sort((a, b) => a.price - b.price);
+  const side = (list) =>
+    (list ?? []).map((o) => ({ price: num(o.price), size: num(o.size) })).filter((o) => o.price > 0 && o.price < 1 && o.size > 0);
+  return { asks: side(book.asks).sort((a, b) => a.price - b.price), bids: side(book.bids).sort((a, b) => b.price - a.price) };
+}
+
+async function fetchAsks(token) {
+  return (await fetchBook(token))?.asks ?? null;
+}
+
+// Mises plus grosses : notre propre achat fait monter le prix (on vide les
+// meilleures offres). Prix tout compris pour chacune, null si le carnet ne
+// suffit pas à la remplir.
+export const LADDER = [100, 500, 1000, 5000];
+function ladderOf(asks, rate) {
+  return LADDER.map((stake) => {
+    const w = walkAsks(asks, stake);
+    if (!w || w.spent < stake * 0.98) return null;
+    return Math.round(Math.min(0.999, w.avg + feePerShare(rate, w.avg)) * 10000) / 10000;
+  });
+}
+
+// Revente de `shares` parts aux acheteurs du carnet, frais déduits :
+// { net, avg, best, sold } (net = ce que rapporte une part en moyenne)
+export async function sellValue(raw, side, shares) {
+  const token = tokenIds(raw)[side];
+  const book = token ? await fetchBook(token) : null;
+  if (!book) return null;
+  let sold = 0;
+  let got = 0;
+  for (const o of book.bids) {
+    if (sold >= shares - 1e-9) break;
+    const q = Math.min(o.size, shares - sold);
+    sold += q;
+    got += q * o.price;
+  }
+  if (!(sold > 0)) return { net: 0, avg: null, best: null, sold: 0 };
+  // Ce qui ne trouve pas d'acheteur ne rapporte rien tout de suite
+  const avg = got / shares;
+  const fee = feePerShare(feeParams(raw), got / sold);
+  return { net: Math.max(0, avg - fee * (sold / shares)), avg, best: book.bids[0].price, sold };
+}
+
+// Récompense de détention : Polymarket verse environ 4 % par an sur la
+// valeur des positions de certains marchés à long terme (élections,
+// géopolitique). Le champ exact n'est pas documenté : on accepte les noms
+// plausibles, sinon rien.
+export const HOLD_RATE = 0.04;
+export function holdingRate(raw, ev = null) {
+  for (const o of [raw, ev]) {
+    if (!o) continue;
+    for (const k of ["holdingRewardsEnabled", "holdingRewards", "holding_rewards_enabled", "enableHoldingRewards"]) {
+      if (o[k] === true || o[k] === "true") return HOLD_RATE;
+    }
+    const r = num(o.holdingRewardsRate ?? o.holdingRewardRate);
+    if (r != null && r > 0) return r > 1 ? r / 100 : r;
+  }
+  return 0;
 }
 
 // Parts disponibles à l'achat d'après les offres de vente :
@@ -105,6 +158,7 @@ export async function realCost(raw, side, stake = STAKE) {
   const token = tokenIds(raw)[side];
   const asks = token ? await fetchAsks(token) : null;
   const walked = asks ? walkAsks(asks, stake) : null;
+  const ladder = asks ? ladderOf(asks, rate) : null;
   const price = walked?.avg ?? best;
   if (price == null) return null;
   const fee = feePerShare(rate, price);
@@ -117,6 +171,8 @@ export async function realCost(raw, side, stake = STAKE) {
     // Montant réellement achetable (le carnet peut être trop mince)
     filled: walked ? Math.round(walked.spent * 100) / 100 : null,
     slippage: walked && best != null ? r(walked.avg - best) : null,
+    ladder,
+    hold: holdingRate(raw),
   };
 }
 
@@ -230,6 +286,44 @@ export function paperStats(bets, { seed = 5 } = {}) {
     ci: bootstrapCI(ex, (b) => b.roi, { seed }),
     roiMid: mean(md.map((b) => b.roiMid)),
     ciMid: bootstrapCI(md, (b) => b.roiMid, { seed: seed + 1 }),
+    ...realism(ex),
+  };
+}
+
+const DAY = 86400000;
+// Durée pendant laquelle la mise est bloquée (au moins 1 heure)
+const daysLocked = (b) => Math.max(1 / 24, ((b.resolvedAt ?? b.end ?? b.placedAt) - b.placedAt) / DAY);
+
+// Ce que le gain par pari ne dit pas :
+//  - l'argent est bloqué jusqu'à la fin du marché : rendement ramené à un an ;
+//  - certains marchés versent une récompense de détention (≈ 4 %/an) ;
+//  - avec une mise plus grosse, on paie plus cher (notre propre achat vide
+//    les meilleures offres) : gain par pari à 500, 1 000 et 5 000 $.
+function realism(ex) {
+  const timed = ex.filter((b) => Number.isFinite(b.placedAt));
+  if (!timed.length) return {};
+  const days = timed.reduce((s, b) => s + daysLocked(b), 0);
+  // Récompense par dollar misé : taux × durée × valeur de la position (≈ prix affiché / prix payé)
+  const reward = (b) => (b.hold > 0 && b.cost > 0 ? b.hold * (daysLocked(b) / 365) * Math.min(1, (b.mid ?? b.cost) / b.cost) : 0);
+  const rewards = timed.reduce((s, b) => s + reward(b), 0);
+  const pnl = timed.reduce((s, b) => s + b.roi, 0);
+  const ladder = LADDER.map((stake, i) => {
+    const xs = timed.filter((b) => b.ladder?.[i] > 0);
+    if (!xs.length) return { stake, n: 0, filled: 0 };
+    const roiAtCost = (b) => {
+      const pay = b.split ? 0.5 : b.won ? 1 : 0;
+      return pay / b.ladder[i] - 1;
+    };
+    return { stake, n: xs.length, roi: mean(xs.map(roiAtCost)), refused: timed.filter((b) => Array.isArray(b.ladder) && b.ladder[i] == null).length };
+  });
+  return {
+    avgDays: days / timed.length,
+    // Gain total / (argent × jours bloqués), ramené à un an, sans réinvestir
+    perYear: (pnl / days) * 365,
+    rewards,
+    roiWithRewards: (pnl + rewards) / timed.length,
+    withHold: timed.filter((b) => b.hold > 0).length,
+    ladder: ladder.some((l) => l.n) ? ladder : null,
   };
 }
 
