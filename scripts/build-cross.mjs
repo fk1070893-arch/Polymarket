@@ -159,6 +159,16 @@ async function metaculus() {
       });
       const rows = data?.results ?? [];
       read += rows.length;
+      // Diagnostic : structure d'une question sans prévision lisible (noms de champs seulement)
+      const sample = rows.find((r) => metaculusProb(r) == null);
+      if (o === 0 && sample) {
+        const q = sample.question ?? {};
+        const agg = q.aggregations ?? {};
+        const shape = Object.fromEntries(
+          Object.entries(agg).map(([k, v]) => [k, v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k2, v2]) => [k2, v2 && typeof v2 === "object" ? Object.keys(v2) : typeof v2])) : typeof v])
+        );
+        console.log(`Metaculus, forme d'une question : post=${Object.keys(sample).join(",")} | question=${Object.keys(q).join(",")} | aggregations=${JSON.stringify(shape)}`);
+      }
       for (const post of rows) {
         const p = metaculusProb(post);
         const q = post.question ?? post;
