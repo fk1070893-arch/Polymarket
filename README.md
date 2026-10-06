@@ -56,6 +56,14 @@ L'onglet **Stratégies** met les idées à l'épreuve sur les marchés en cours,
 - **Sport contre bookmakers** (`scripts/build-odds.mjs`) : les cotes des bookmakers (Pinnacle en priorité, via The Odds API), sans leur marge, comparées au prix d'achat Polymarket. Écart d'au moins 3 pts dans les 24 h avant le match → 1 $ fictif. La précision des deux (score de Brier) est aussi suivie. **Activation :** créer une clé gratuite sur the-odds-api.com, puis l'ajouter au dépôt dans *Settings → Secrets and variables → Actions → New repository secret*, nom `ODDS_API_KEY`. La clé n'apparaît jamais dans le code, les logs ou le site ; le quota gratuit (500 requêtes / mois) est réparti automatiquement sur le mois.
 - **Anomalies de prix** (`scripts/build-arbs.mjs`) : dans les événements où une seule issue peut gagner, les « Oui » doivent valoir 100 % au total. Si la somme s'en écarte, acheter toutes les issues (ou tous les « Non ») rapporte un gain sûr ; le site vérifie dans les carnets d'ordres combien on aurait vraiment pu acheter.
 
+### Études de niche (onglet Backtest)
+
+- **« Avant telle date »** : marchés « X arrivera-t-il avant le … ? », calibrés 7, 3 et 1 jour avant l'échéance (le « Oui » garde-t-il un prix d'espoir ?).
+- **Marchés tout neufs** : calibration 6 h et 24 h après l'ouverture, quand il y a encore peu de traders.
+- **Crypto « Up or Down »** (15 min et 1 h) : à mi-fenêtre, probabilité de finir en hausse calculée à partir du prix d'ouverture, du prix du moment (bougies minute Deribit) et de la volatilité DVOL, comparée au prix Polymarket.
+
+Le comparateur bookmakers couvre aussi les tournois ATP/WTA en cours et des ligues de foot secondaires (Eredivisie, Liga Portugal, MLS, Brésil, Mexique, Turquie).
+
 Le backtest compte lui aussi l'écart achat-vente : il est mesuré sur les marchés ouverts de même taille et ajouté au prix de la veille.
 
 ### Portefeuille fictif
