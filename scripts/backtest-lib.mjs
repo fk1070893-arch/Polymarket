@@ -42,9 +42,63 @@ export function hashId(id) {
   return h >>> 0;
 }
 
+// Plusieurs marchés d'un même événement (les seuils 100k / 105k / 110k
+// d'un même jour, le vainqueur et le handicap d'un même match…) gagnent
+// ou perdent ensemble : ils ne sont pas indépendants. Toutes les
+// statistiques travaillent donc par événement : `event` sert de clé de
+// regroupement (l'identifiant du marché à défaut).
+export function clusterKey(s) {
+  return s.event ?? s.id;
+}
+
 // Répartition stable en deux moitiés (A/B) à partir de l'identifiant
 export function half(id) {
   return hashId(id) % 2 === 0 ? "A" : "B";
+}
+
+// Générateur pseudo-aléatoire reproductible (mulberry32)
+export function rng(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Marge d'erreur d'une moyenne par "bootstrap par grappes" : on retire au
+// hasard des événements entiers (avec remise) et on recalcule la moyenne,
+// 1 000 fois. L'intervalle contient 90 % des moyennes obtenues. Si tout
+// l'intervalle est au-dessus de zéro, le gain a peu de chances d'être dû
+// au hasard.
+export function bootstrapCI(items, value, { iters = 1000, seed = 7, level = 0.9, minClusters = 8 } = {}) {
+  const groups = new Map();
+  for (const it of items) {
+    const k = clusterKey(it);
+    const g = groups.get(k) ?? { sum: 0, n: 0 };
+    g.sum += value(it);
+    g.n++;
+    groups.set(k, g);
+  }
+  const list = [...groups.values()];
+  if (list.length < minClusters) return null;
+  const rand = rng(seed);
+  const means = [];
+  for (let i = 0; i < iters; i++) {
+    let sum = 0;
+    let n = 0;
+    for (let j = 0; j < list.length; j++) {
+      const g = list[Math.floor(rand() * list.length)];
+      sum += g.sum;
+      n += g.n;
+    }
+    means.push(sum / n);
+  }
+  means.sort((a, b) => a - b);
+  const q = (x) => means[Math.min(means.length - 1, Math.max(0, Math.floor(x * means.length)))];
+  return [q((1 - level) / 2), q(1 - (1 - level) / 2)];
 }
 
 // Gain pour 1 $ misé sur "Oui" (ou "Non") au prix p
@@ -60,39 +114,39 @@ function binIndex(p) {
   return BINS.length - 2;
 }
 
-function emptyBin(i) {
-  return { lo: BINS[i], hi: Math.min(1, BINS[i + 1]), n: 0, sumP: 0, wins: 0, roiYes: 0, roiNo: 0, A: { n: 0, roiYes: 0, roiNo: 0 }, B: { n: 0, roiYes: 0, roiNo: 0 } };
-}
+const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
 
-// samples : [{ id, p (prix "Oui" 24 h avant), outcome (1/0) }]
-export function calibration(samples) {
-  const bins = BINS.slice(0, -1).map((_, i) => emptyBin(i));
+// samples : [{ id, event, p (prix "Oui" 24 h avant), outcome (1/0) }]
+export function calibration(samples, { ci = true } = {}) {
+  const per = BINS.slice(0, -1).map(() => []);
   for (const s of samples) {
     if (!(s.p > 0 && s.p < 1)) continue;
-    const b = bins[binIndex(s.p)];
-    const ry = roiYes(s.p, s.outcome);
-    const rn = roiNo(s.p, s.outcome);
-    b.n++;
-    b.sumP += s.p;
-    b.wins += s.outcome;
-    b.roiYes += ry;
-    b.roiNo += rn;
-    const h = b[half(s.id)];
-    h.n++;
-    h.roiYes += ry;
-    h.roiNo += rn;
+    per[binIndex(s.p)].push(s);
   }
-  return bins.map((b) => ({
-    lo: b.lo,
-    hi: b.hi,
-    n: b.n,
-    avgPrice: b.n ? b.sumP / b.n : null,
-    freq: b.n ? b.wins / b.n : null,
-    roiYes: b.n ? b.roiYes / b.n : null,
-    roiNo: b.n ? b.roiNo / b.n : null,
-    A: { n: b.A.n, roiYes: b.A.n ? b.A.roiYes / b.A.n : null, roiNo: b.A.n ? b.A.roiNo / b.A.n : null },
-    B: { n: b.B.n, roiYes: b.B.n ? b.B.roiYes / b.B.n : null, roiNo: b.B.n ? b.B.roiNo / b.B.n : null },
-  }));
+  return per.map((list, i) => {
+    const side = (h) => {
+      const xs = list.filter((s) => half(clusterKey(s)) === h);
+      return {
+        n: xs.length,
+        roiYes: mean(xs.map((s) => roiYes(s.p, s.outcome))),
+        roiNo: mean(xs.map((s) => roiNo(s.p, s.outcome))),
+      };
+    };
+    return {
+      lo: BINS[i],
+      hi: Math.min(1, BINS[i + 1]),
+      n: list.length,
+      events: new Set(list.map(clusterKey)).size,
+      avgPrice: mean(list.map((s) => s.p)),
+      freq: mean(list.map((s) => s.outcome)),
+      roiYes: mean(list.map((s) => roiYes(s.p, s.outcome))),
+      roiNo: mean(list.map((s) => roiNo(s.p, s.outcome))),
+      ciYes: ci ? bootstrapCI(list, (s) => roiYes(s.p, s.outcome), { seed: 11 + i }) : null,
+      ciNo: ci ? bootstrapCI(list, (s) => roiNo(s.p, s.outcome), { seed: 101 + i }) : null,
+      A: side("A"),
+      B: side("B"),
+    };
+  });
 }
 
 export function brier(samples, key = "p") {
@@ -101,24 +155,38 @@ export function brier(samples, key = "p") {
 }
 
 // Stratégie "suivre le modèle" : acheter Oui si modèle > marché + seuil,
-// Non si modèle < marché − seuil. Résultat par moitié A/B.
-export function followSignals(samples, threshold) {
-  const res = { all: acc(), A: acc(), B: acc() };
-  function acc() {
-    return { bets: 0, wins: 0, pnl: 0 };
-  }
-  for (const s of samples) {
-    const edge = s.model - s.p;
-    if (Math.abs(edge) < threshold || s.p < 0.03 || s.p > 0.97) continue;
-    const yes = edge > 0;
-    const r = yes ? roiYes(s.p, s.outcome) : roiNo(s.p, s.outcome);
-    const won = yes ? s.outcome === 1 : s.outcome === 0;
-    for (const k of ["all", half(s.id)]) {
-      res[k].bets++;
-      res[k].wins += won ? 1 : 0;
-      res[k].pnl += r;
+// Non si modèle < marché − seuil. Par défaut, un seul pari par événement
+// (celui où l'écart est le plus grand), pour ne pas compter dix fois le
+// même mouvement du bitcoin.
+export function followSignals(samples, threshold, { onePerEvent = true } = {}) {
+  let signals = samples
+    .filter((s) => Math.abs(s.model - s.p) >= threshold && s.p >= 0.03 && s.p <= 0.97)
+    .map((s) => {
+      const yes = s.model > s.p;
+      return {
+        ...s,
+        roi: yes ? roiYes(s.p, s.outcome) : roiNo(s.p, s.outcome),
+        won: yes ? s.outcome === 1 : s.outcome === 0,
+      };
+    });
+  if (onePerEvent) {
+    const best = new Map();
+    for (const s of signals) {
+      const k = clusterKey(s);
+      const cur = best.get(k);
+      if (!cur || Math.abs(s.model - s.p) > Math.abs(cur.model - cur.p)) best.set(k, s);
     }
+    signals = [...best.values()];
   }
-  for (const k of Object.keys(res)) res[k].roi = res[k].bets ? res[k].pnl / res[k].bets : null;
-  return res;
+  const summary = (xs) => ({
+    bets: xs.length,
+    wins: xs.filter((s) => s.won).length,
+    pnl: xs.reduce((a, s) => a + s.roi, 0),
+    roi: mean(xs.map((s) => s.roi)),
+  });
+  return {
+    all: { ...summary(signals), events: new Set(signals.map(clusterKey)).size, ci: bootstrapCI(signals, (s) => s.roi, { seed: 3 }) },
+    A: summary(signals.filter((s) => half(clusterKey(s)) === "A")),
+    B: summary(signals.filter((s) => half(clusterKey(s)) === "B")),
+  };
 }

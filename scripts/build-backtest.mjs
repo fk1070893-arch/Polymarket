@@ -89,6 +89,7 @@ function closedMarkets(rawEvents) {
       if (!Number.isFinite(ref) || (start && ref - LOOKBACK < start)) continue;
       out.push({
         id: m.id,
+        event: String(ev.id),
         question: m.question,
         eventTitle: ev.title ?? "",
         tags,
@@ -169,7 +170,7 @@ async function calibrationStudy() {
     const s = samples.filter((x) => x.bucket === b.key);
     if (s.length >= 30) byVolume[b.key] = { n: s.length, brier: brier(s), bins: calibration(s) };
   }
-  return { n: samples.length, brier: brier(samples), bins: calibration(samples), byGroup, byVolume };
+  return { n: samples.length, events: new Set(samples.map((x) => x.event)).size, brier: brier(samples), bins: calibration(samples), byGroup, byVolume };
 }
 
 // ---------- Étude 2 : modèle crypto rejoué ----------
@@ -237,7 +238,7 @@ async function cryptoStudy() {
     // Échéance du marché vue depuis t0 (la date prévue, pas la clôture réelle)
     const model = modelProbability(m.q, { spot: s, vol: () => v / 100, dateMs: m.end, nowMs: t0 });
     if (model == null || !Number.isFinite(model)) continue;
-    samples.push({ id: m.id, kind: m.q.kind, asset: m.q.asset, bucket: m.bucket, p: m.p, model, outcome: m.outcome });
+    samples.push({ id: m.id, event: m.event, kind: m.q.kind, asset: m.q.asset, bucket: m.bucket, p: m.p, model, outcome: m.outcome });
   }
   console.log(`Crypto : ${samples.length} marchés rejoués`);
 
@@ -245,16 +246,21 @@ async function cryptoStudy() {
   for (const k of ["above", "below", "between", "touch"]) {
     const s = samples.filter((x) => x.kind === k);
     if (s.length >= 10)
-      byKind[k] = { n: s.length, brierModel: brier(s, "model"), brierPoly: brier(s, "p"), signals: followSignals(s, 0.05) };
+      byKind[k] = { n: s.length, events: new Set(s.map((x) => x.event)).size, brierModel: brier(s, "model"), brierPoly: brier(s, "p"), signals: followSignals(s, 0.05) };
   }
   const byVolume = {};
   for (const b of VOLUME_BUCKETS) {
     const s = samples.filter((x) => x.bucket === b.key);
     if (s.length >= 10)
-      byVolume[b.key] = { n: s.length, brierModel: brier(s, "model"), brierPoly: brier(s, "p"), signals: followSignals(s, 0.05) };
+      byVolume[b.key] = { n: s.length, events: new Set(s.map((x) => x.event)).size, brierModel: brier(s, "model"), brierPoly: brier(s, "p"), signals: followSignals(s, 0.05) };
   }
   const thresholds = {};
-  for (const t of [0.03, 0.05, 0.1, 0.15]) thresholds[t] = followSignals(samples, t);
+  // Un pari par événement (la mesure honnête) ; et tous les signaux, pour comparer
+  const thresholdsAll = {};
+  for (const t of [0.03, 0.05, 0.1, 0.15]) {
+    thresholds[t] = followSignals(samples, t);
+    thresholdsAll[t] = followSignals(samples, t, { onePerEvent: false });
+  }
 
   return {
     n: samples.length,
@@ -262,7 +268,9 @@ async function cryptoStudy() {
     brierPoly: brier(samples, "p"),
     modelBins: calibration(samples.map((x) => ({ id: x.id, p: x.model, outcome: x.outcome }))),
     polyBins: calibration(samples),
+    events: new Set(samples.map((x) => x.event)).size,
     thresholds,
+    thresholdsAll,
     byKind,
     byVolume,
   };
@@ -271,26 +279,30 @@ async function cryptoStudy() {
 // Résumé lisible dans les logs de l'Action
 function logSummary(calib, crypto) {
   const p = (v) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${Math.round(v * 100)}%`);
+  const ci = (c) => (c ? `[${p(c[0])} ; ${p(c[1])}]` : "[—]");
   const rows = (bins) =>
     bins
       .filter((b) => b.n > 0)
       .map(
         (b) =>
-          `  ${Math.round(b.lo * 100)}-${Math.round(b.hi * 100)}% n=${b.n} prix=${Math.round(b.avgPrice * 100)}% réel=${Math.round(b.freq * 100)}% ` +
-          `Oui=${p(b.roiYes)} (A ${p(b.A.roiYes)} / B ${p(b.B.roiYes)}) Non=${p(b.roiNo)} (A ${p(b.A.roiNo)} / B ${p(b.B.roiNo)})`
+          `  ${Math.round(b.lo * 100)}-${Math.round(b.hi * 100)}% n=${b.n} év=${b.events} prix=${Math.round(b.avgPrice * 100)}% réel=${Math.round(b.freq * 100)}% ` +
+          `Oui=${p(b.roiYes)} ${ci(b.ciYes)} (A ${p(b.A.roiYes)} / B ${p(b.B.roiYes)}) Non=${p(b.roiNo)} ${ci(b.ciNo)} (A ${p(b.A.roiNo)} / B ${p(b.B.roiNo)})`
       )
       .join("\n");
-  console.log(`\n=== Calibration (${calib.n} marchés, Brier ${calib.brier?.toFixed(3)}) ===\n${rows(calib.bins)}`);
+  console.log(`\n=== Calibration (${calib.n} marchés, ${calib.events} événements, Brier ${calib.brier?.toFixed(3)}) ===\n${rows(calib.bins)}`);
   for (const [g, r] of Object.entries(calib.byGroup)) console.log(`--- ${g} (${r.n}, Brier ${r.brier.toFixed(3)}) ---\n${rows(r.bins)}`);
   for (const [g, r] of Object.entries(calib.byVolume ?? {})) console.log(`--- volume ${g} (${r.n}, Brier ${r.brier.toFixed(3)}) ---\n${rows(r.bins)}`);
   if (crypto?.n) {
-    console.log(`\n=== Modèle crypto (${crypto.n} marchés) Brier modèle ${crypto.brierModel.toFixed(3)} / Polymarket ${crypto.brierPoly.toFixed(3)} ===`);
+    console.log(`\n=== Modèle crypto (${crypto.n} marchés, ${crypto.events} événements) Brier modèle ${crypto.brierModel.toFixed(3)} / Polymarket ${crypto.brierPoly.toFixed(3)} ===`);
     for (const [t, r] of Object.entries(crypto.thresholds))
-      console.log(`  écart ≥ ${Math.round(t * 100)} pts : ${r.all.bets} paris, ${r.all.wins} gagnés, gain/pari ${p(r.all.roi)} (A ${p(r.A.roi)} / B ${p(r.B.roi)})`);
+      console.log(
+        `  écart ≥ ${Math.round(t * 100)} pts, 1 pari/événement : ${r.all.bets} paris, ${r.all.wins} gagnés, gain/pari ${p(r.all.roi)} ${ci(r.all.ci)} (A ${p(r.A.roi)} / B ${p(r.B.roi)})` +
+          ` | tous les signaux : ${crypto.thresholdsAll[t].all.bets} paris, ${p(crypto.thresholdsAll[t].all.roi)}`
+      );
     for (const [k, r] of Object.entries(crypto.byVolume ?? {}))
-      console.log(`  volume ${k} : n=${r.n} Brier modèle ${r.brierModel.toFixed(3)} / Polymarket ${r.brierPoly.toFixed(3)}, signaux ${r.signals.all.bets}, gain/pari ${p(r.signals.all.roi)}`);
+      console.log(`  volume ${k} : n=${r.n} (${r.events} év.) Brier modèle ${r.brierModel.toFixed(3)} / Polymarket ${r.brierPoly.toFixed(3)}, signaux ${r.signals.all.bets}, gain/pari ${p(r.signals.all.roi)} ${ci(r.signals.all.ci)}`);
     for (const [k, r] of Object.entries(crypto.byKind))
-      console.log(`  ${k} : n=${r.n} Brier modèle ${r.brierModel.toFixed(3)} / Polymarket ${r.brierPoly.toFixed(3)}, signaux ${r.signals.all.bets}, gain/pari ${p(r.signals.all.roi)}`);
+      console.log(`  ${k} : n=${r.n} (${r.events} év.) Brier modèle ${r.brierModel.toFixed(3)} / Polymarket ${r.brierPoly.toFixed(3)}, signaux ${r.signals.all.bets}, gain/pari ${p(r.signals.all.roi)} ${ci(r.signals.all.ci)} (A ${p(r.signals.A.roi)} / B ${p(r.signals.B.roi)})`);
   }
 }
 
