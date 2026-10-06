@@ -286,7 +286,17 @@ const KIND_FR = {
   relais: ["Wallet relais (neuf)", ""],
 };
 const profile = (addr, text) => `<a href="https://polymarket.com/profile/${esc(addr)}" target="_blank" rel="noopener noreferrer">${text}</a>`;
-const scan = (addr) => `<a href="https://polygonscan.com/address/${esc(addr)}" target="_blank" rel="noopener noreferrer">${shortAddress(addr)}</a>`;
+// Explorateur de chaque blockchain, pour vérifier une adresse
+const EXPLORERS = {
+  polygon: "https://polygonscan.com/address/",
+  ethereum: "https://etherscan.io/address/",
+  base: "https://basescan.org/address/",
+  arbitrum: "https://arbiscan.io/address/",
+  optimism: "https://optimistic.etherscan.io/address/",
+};
+const CHAIN_FR = { polygon: "Polygon", ethereum: "Ethereum", base: "Base", arbitrum: "Arbitrum", optimism: "Optimism" };
+const scan = (addr, chain = "polygon") =>
+  `<a href="${EXPLORERS[chain] ?? EXPLORERS.polygon}${esc(addr)}" target="_blank" rel="noopener noreferrer">${shortAddress(addr)}</a>${chain !== "polygon" ? ` <span class="muted small">(${CHAIN_FR[chain] ?? chain})</span>` : ""}`;
 
 function funderLine(f) {
   const [kind, tone] = KIND_FR[f.kind] ?? KIND_FR.wallet;
@@ -307,7 +317,21 @@ const amountText = (f) => (f.via === "parts" ? `${new Intl.NumberFormat("fr-FR")
 // Nom court d'une adresse de la chaîne : pseudo Polymarket, nom public ou adresse
 function who(f) {
   if (f.kind === "polymarket" && f.pm) return profile(f.pm.proxy, f.pm.name ? `<b>${esc(f.pm.name)}</b>` : shortAddress(f.pm.proxy));
-  return `${f.label ? `<b>${esc(f.label)}</b> ` : ""}${scan(f.address)}`;
+  return `${f.label ? `<b>${esc(f.label)}</b> ` : ""}${scan(f.address, f.chain)}`;
+}
+
+// Retraits vers un compte d'échange (adresse de dépôt personnelle)
+function exitsText(e) {
+  if (!e.exits?.length) return "";
+  return e.exits
+    .map((x) => {
+      const others = x.others ?? [];
+      const many = (x.suspects ?? 1) > 1 ? ` · <b class="down">même compte que ${x.suspects - 1} autre${x.suspects > 2 ? "s" : ""} wallet${x.suspects > 2 ? "s" : ""} suspect${x.suspects > 2 ? "s" : ""}</b>` : "";
+      return `Retire ses gains (${usd0.format(x.amount)}) vers un compte d'échange, adresse de dépôt ${scan(x.address)}${
+        others.length ? `, alimentée aussi par ${others.length} autre${others.length > 1 ? "s" : ""} wallet${others.length > 1 ? "s" : ""} : ${others.slice(0, 4).map(who).join(", ")}` : ""
+      }${many}`;
+    })
+    .join("<br />");
 }
 
 // Chaîne de l'argent : origine → relais → … → wallet suspect
@@ -327,16 +351,19 @@ function founderLine(state, a) {
     e.owner && (e.owner.shared ?? 1) > 1
       ? ` · <b class="down">même wallet de signature que ${e.owner.shared - 1} autre${e.owner.shared > 2 ? "s" : ""} wallet${e.owner.shared > 2 ? "s" : ""} suspect${e.owner.shared > 2 ? "s" : ""}</b>`
       : "";
-  if (!e.founder) return e.error ? "" : `<p class="alert-founder muted small">Founder : rien trouvé (ni dollars, ni parts reçues avant ses paris)${owner}.</p>`;
+  const exits = exitsText(e);
+  const exitLine = exits ? `<p class="alert-founder small">${exits}</p>` : "";
+  if (!e.founder) return e.error ? exitLine : `<p class="alert-founder muted small">Founder : rien trouvé (ni dollars, ni parts reçues avant ses paris)${owner}.</p>${exitLine}`;
   const o = e.origin;
   const [kind, tone] = KIND_FR[o.kind] ?? KIND_FR.wallet;
   const steps = [];
   if (e.viaOwner) steps.push("passé par son wallet de signature");
-  if (e.hops > 1) steps.push(`via ${e.hops - 1} wallet${e.hops > 2 ? "s" : ""} relais`);
+  if (e.bridge) steps.push(`arrivé par un pont depuis ${esc(e.bridge.name)}`);
+  if (e.relays > 0) steps.push(`via ${e.relays} wallet${e.relays > 1 ? "s" : ""} relais`);
   if (e.via === "parts") steps.push("parts de pari envoyées directement");
   const via = steps.length ? ` <span class="muted">(${steps.join(", ")})</span>` : "";
   const many = (o.shared ?? 1) > 1 ? ` · <b class="down">derrière ${o.shared} wallets suspects</b>` : "";
-  return `<p class="alert-founder small">Argent venu de ${who(o)} <span class="flag ${tone}">${kind}</span>${via}${many}${owner}</p>`;
+  return `<p class="alert-founder small">Argent venu de ${who(o)} <span class="flag ${tone}">${kind}</span>${via}${many}${owner}</p>${exitLine}`;
 }
 
 function renderTrails(ctx) {
@@ -353,7 +380,10 @@ function renderTrails(ctx) {
       <h2>D'où vient l'argent des wallets suspects gagnants ?</h2>
       <p class="muted small">Wallets de moins de 30 jours dont les alertes ont gagné (${data.candidates ?? data.wallets.length}) : qui leur a envoyé leurs dollars juste avant leurs premiers paris (le founder), lu sur la blockchain Polygon (publique).
         Quand le founder est un wallet neuf qui ne sert que de relais, le site remonte jusqu'à 3 étages. Il cherche aussi juste avant les plus grosses mises, jusqu'à 14 jours en arrière,
-        du côté du wallet qui signe les ordres (son propriétaire), et les parts de pari envoyées directement d'un compte à l'autre. Le founder de chaque alerte est aussi indiqué sous l'alerte.
+        du côté du wallet qui signe les ordres (son propriétaire), et les parts de pari envoyées directement d'un compte à l'autre.
+        Quand l'argent arrive par un pont, il suit la même adresse sur Ethereum, Base, Arbitrum et Optimism.
+        Côté sortie : si un wallet retire ses gains vers une adresse de dépôt d'une plateforme d'échange (chaque client y a la sienne),
+        les autres wallets qui envoient vers cette même adresse alimentent le même compte client. Le founder de chaque alerte est aussi indiqué sous l'alerte.
         Si l'argent vient d'un autre compte Polymarket, c'est sans doute le compte principal de la même personne. Un transfert ne le prouve pas (ça peut être un paiement),
         et beaucoup viennent d'une plateforme d'échange : piste froide. Mis à jour ${timeAgo(new Date(data.updatedAt).getTime())}.</p>
       ${
@@ -361,8 +391,9 @@ function renderTrails(ctx) {
           ? `<h3>Une même adresse derrière plusieurs wallets suspects</h3><ul class="trail-list">${clusters
               .map(
                 (c) =>
-                  `<li>${c.kind === "polymarket" && c.pm ? profile(c.pm.proxy, c.pm.name ? `<b>${esc(c.pm.name)}</b>` : shortAddress(c.pm.proxy)) : `${c.label ? `<b>${esc(c.label)}</b> ` : ""}${scan(c.address)}`}
-                  a financé <b>${c.wallets.length} wallets suspects</b> : ${c.wallets.map((w) => profile(w, shortAddress(w))).join(", ")}</li>`
+                  c.type === "exchange"
+                    ? `<li><b>${c.wallets.length} wallets suspects</b> retirent vers le même compte d'échange (adresse de dépôt ${scan(c.address)}) : ${c.wallets.map((w) => profile(w, shortAddress(w))).join(", ")}</li>`
+                    : `<li>${who(c)} a financé <b>${c.wallets.length} wallets suspects</b> : ${c.wallets.map((w) => profile(w, shortAddress(w))).join(", ")}</li>`
               )
               .join("")}</ul>`
           : ""
@@ -387,6 +418,7 @@ function renderTrails(ctx) {
                   : ""
               }
               ${w.chain?.length > 1 ? `<p class="trail-main small">Chemin de l'argent : ${chainText(w.chain)} → ce wallet</p>` : ""}
+              ${w.exits?.length ? `<p class="trail-main small">${exitsText(w)}</p>` : ""}
               ${
                 w.funders.length
                   ? `<ul class="trail-list">${w.funders.map(funderLine).join("")}</ul>`

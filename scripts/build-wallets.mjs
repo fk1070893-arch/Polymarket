@@ -13,16 +13,18 @@
 // l'identité réelle de quelqu'un. Un transfert ne prouve pas que ce soit la
 // même personne (ça peut être un paiement).
 //
-// Source : serveurs publics de la blockchain Polygon (gratuits, sans clé),
-// ou Etherscan si le secret ETHERSCAN_API_KEY existe. Une fois par heure.
+// Source : serveurs publics des blockchains Polygon, Ethereum, Base,
+// Arbitrum et Optimism (gratuits, sans clé), à chaque passage.
 // Résultat : site/data/wallets.json (mémoire : .state/wallets-state.json)
 
+import { CHAINS, addrOf, makeChain, topicOf } from "./chain-lib.mjs";
 import { getJSON, loadState, mapLimit, readData, writeState } from "./lib.mjs";
 
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
-const MAX_WALLETS = 12; // nouveaux wallets examinés par passage
-const BUDGET = 90000; // temps maximum de lecture de la blockchain (ms)
+const MAX_WALLETS = 10; // nouveaux wallets examinés par passage
+const MAX_EXITS = 5; // wallets dont on regarde les retraits par passage
+const BUDGET = 120000; // temps maximum de lecture de la blockchain (ms)
 const RETRY = HOUR; // nouvel essai après une lecture en échec
 const FUNDER_TTL = 7 * DAY;
 const MAX_HOPS = 3; // étages remontés au plus derrière un wallet intermédiaire
@@ -30,10 +32,6 @@ const FRESH_TXS = 50; // un wallet qui a envoyé si peu de transactions est un s
 const DATA_API = "https://data-api.polymarket.com";
 const GAMMA = "https://gamma-api.polymarket.com";
 const BLOCKSCOUT = "https://polygon.blockscout.com";
-const ETHERSCAN_KEY = (process.env.ETHERSCAN_API_KEY ?? "").trim();
-
-// Dollars sur Polygon : USDC.e (utilisé par Polymarket) et USDC natif
-const USDC = new Set(["0x2791bca1f2de4661ed88a30c99a7a9449aa84174", "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359"]);
 // Contrats de Polymarket : l'argent qu'ils envoient vient des paris (ventes,
 // gains), pas d'un dépôt
 const POLYMARKET_CONTRACTS = new Set([
@@ -50,149 +48,11 @@ const num = (v) => {
 const lc = (s) => String(s ?? "").toLowerCase();
 const now = Date.now();
 
-// ---------- Explorateur Polygon ----------
+// ---------- Lecture des blockchains ----------
 
-// Serveurs publics de la blockchain Polygon (gratuits, sans clé) : on lit
-// directement les transferts de dollars, sans passer par un explorateur
-const RPCS = ["https://polygon-bor-rpc.publicnode.com", "https://polygon.drpc.org", "https://polygon-rpc.com", "https://1rpc.io/matic"];
-const TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
-const BLOCK_TIME = 2; // secondes par bloc, à peu près
-let rpcIndex = 0;
-
-async function rpc(method, params) {
-  let lastErr;
-  for (let i = 0; i < RPCS.length; i++) {
-    const url = RPCS[(rpcIndex + i) % RPCS.length];
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-        signal: AbortSignal.timeout(15000),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status} sur ${new URL(url).host}`);
-      const data = await res.json();
-      if (data.error) throw Object.assign(new Error(`${data.error.message ?? "erreur"} (${new URL(url).host})`), { rpcError: true });
-      rpcIndex = (rpcIndex + i) % RPCS.length; // garde le serveur qui répond
-      return data.result;
-    } catch (err) {
-      lastErr = err;
-      // Une plage de blocs trop grande se règle en la coupant, pas en changeant de serveur
-      if (err.rpcError && /range|limit|too many|exceed/i.test(err.message)) throw err;
-    }
-  }
-  throw lastErr;
-}
-
-let head = null; // dernier bloc connu : { number, ts }
-async function latestBlock() {
-  if (!head) {
-    const b = await rpc("eth_getBlockByNumber", ["latest", false]);
-    head = { number: parseInt(b.number, 16), ts: parseInt(b.timestamp, 16) };
-  }
-  return head;
-}
-
-// Numéro du bloc produit vers l'instant `ts` (secondes), à quelques blocs près
-async function blockAt(ts) {
-  const h = await latestBlock();
-  let guess = Math.max(1, Math.round(h.number - (h.ts - ts) / BLOCK_TIME));
-  for (let i = 0; i < 2; i++) {
-    const b = await rpc("eth_getBlockByNumber", [`0x${guess.toString(16)}`, false]).catch(() => null);
-    if (!b) break;
-    const diff = ts - parseInt(b.timestamp, 16);
-    if (Math.abs(diff) < 60) break;
-    guess = Math.max(1, Math.min(h.number, Math.round(guess + diff / BLOCK_TIME)));
-  }
-  return guess;
-}
-
-// Journaux de la blockchain entre deux instants (ms) pour un filtre donné.
-// La plage de blocs par requête grandit tant que le serveur l'accepte, et se
-// réduit s'il la refuse : peu de requêtes même sur plusieurs semaines.
-// Chaque serveur a sa propre limite de plage de blocs pour les journaux :
-// on l'apprend en route (on double tant qu'il accepte, on divise par 4
-// s'il refuse) et on écarte ceux qui n'acceptent que de toutes petites plages.
-const LOG_SERVERS = [
-  "https://polygon-bor-rpc.publicnode.com",
-  "https://polygon.drpc.org",
-  "https://polygon-rpc.com",
-  "https://polygon.llamarpc.com",
-  "https://polygon-mainnet.public.blastapi.io",
-].map((url) => ({ url, step: 20000, dead: false, fails: 0 }));
-let logServer = 0;
-const MIN_STEP = 1000;
-
-async function getLogsFrom(server, params) {
-  const res = await fetch(server.url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_getLogs", params }),
-    signal: AbortSignal.timeout(20000),
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status} sur ${new URL(server.url).host}`);
-  const data = await res.json();
-  if (data.error) throw Object.assign(new Error(`${data.error.message ?? "erreur"} (${new URL(server.url).host})`), { rpcError: true });
-  return data.result ?? [];
-}
-
-// Journaux de la blockchain entre deux instants (ms) pour un filtre donné
-async function scanLogs(filter, fromMs, toMs) {
-  const from = await blockAt(Math.floor(fromMs / 1000));
-  const to = Math.min((await latestBlock()).number, await blockAt(Math.floor(toMs / 1000)));
-  const out = [];
-  let lastErr = null;
-  for (let start = from, tries = 0; start <= to; ) {
-    const alive = LOG_SERVERS.filter((x) => !x.dead);
-    if (!alive.length || tries > 30) throw lastErr ?? new Error("aucun serveur Polygon ne répond");
-    const server = alive[logServer % alive.length];
-    const end = Math.min(to, start + server.step - 1);
-    try {
-      out.push(...(await getLogsFrom(server, [{ ...filter, fromBlock: `0x${start.toString(16)}`, toBlock: `0x${end.toString(16)}` }])));
-      start = end + 1;
-      tries = 0;
-      server.fails = 0;
-      server.step = Math.min(200000, server.step * 2);
-    } catch (err) {
-      lastErr = err;
-      tries++;
-      const rangeIssue = (err.rpcError && /range|limit|exceed|too many|block|large/i.test(err.message)) || err.name === "TimeoutError";
-      if (rangeIssue && server.step > MIN_STEP) {
-        server.step = Math.max(MIN_STEP, Math.floor(server.step / 4));
-      } else {
-        // Limite trop petite, ou serveur en panne : on passe au suivant
-        if (rangeIssue || ++server.fails >= 3) server.dead = true;
-        logServer++;
-      }
-    }
-  }
-  return out;
-}
-
-const topicOf = (address) => `0x${"0".repeat(24)}${address.slice(2)}`;
-const addrOf = (topic) => `0x${topic.slice(26)}`;
-async function tsOf(blockHex) {
-  const h = await latestBlock();
-  return Math.round(h.ts - (h.number - parseInt(blockHex, 16)) * BLOCK_TIME);
-}
-
-// Dollars reçus par une adresse entre deux instants (ms)
-async function rpcTransfers(address, fromMs, toMs) {
-  const logs = await scanLogs({ address: [...USDC], topics: [TRANSFER, null, topicOf(address)] }, fromMs, toMs);
-  const out = [];
-  for (const l of logs) {
-    out.push({
-      from: addrOf(l.topics[1]),
-      to: address,
-      value: BigInt(l.data).toString(),
-      tokenDecimal: "6",
-      contractAddress: l.address,
-      timeStamp: String(await tsOf(l.blockNumber)),
-      hash: l.transactionHash,
-    });
-  }
-  return out.sort((a, b) => Number(a.timeStamp) - Number(b.timeStamp));
-}
+const chains = Object.fromEntries(Object.keys(CHAINS).map((k) => [k, makeChain(k)]));
+const polygon = chains.polygon;
+const OTHER_CHAINS = ["ethereum", "base", "arbitrum", "optimism"];
 
 // Parts de pari envoyées directement par un autre wallet (pas un échange
 // sur Polymarket, où c'est le contrat de Polymarket qui fait le transfert)
@@ -200,7 +60,7 @@ const CTF = "0x4d97dcd97ec945f40cf65f87097ace5ea0476045";
 const TRANSFER_SINGLE = "0xc3d58168c5ae7397731d063d5bbf3d657854427343f4c083240f7aacaa2d0f62";
 const TRANSFER_BATCH = "0x4a39dc06d4c0dbc64b70af90fd698a233a518aa5d07e595d983b8c0526c8f7fb";
 async function sharesReceived(address, fromMs, toMs) {
-  const logs = await scanLogs({ address: CTF, topics: [[TRANSFER_SINGLE, TRANSFER_BATCH], null, null, topicOf(address)] }, fromMs, toMs);
+  const logs = await polygon.scanLogs({ address: CTF, topics: [[TRANSFER_SINGLE, TRANSFER_BATCH], null, null, topicOf(address)] }, fromMs, toMs);
   const out = [];
   for (const l of logs) {
     const operator = addrOf(l.topics[1]);
@@ -209,7 +69,7 @@ async function sharesReceived(address, fromMs, toMs) {
     if (operator !== from || /^0x0+$/.test(from) || POLYMARKET_CONTRACTS.has(operator)) continue;
     // Quantité : 2e mot des données pour TransferSingle (id, valeur), en parts de 1 $
     const value = l.topics[0] === TRANSFER_SINGLE ? Number(BigInt(`0x${l.data.slice(66, 130)}`)) / 1e6 : 0;
-    out.push({ from, value, ts: (await tsOf(l.blockNumber)) * 1000, hash: l.transactionHash });
+    out.push({ from, amount: value, ts: (await polygon.tsOf(l.blockNumber)) * 1000, tx: l.transactionHash });
   }
   return out;
 }
@@ -217,7 +77,7 @@ async function sharesReceived(address, fromMs, toMs) {
 // Propriétaire d'un wallet Polymarket de type « Safe » (le wallet qui signe
 // ses ordres) : fonction getOwners() du contrat
 async function safeOwner(address) {
-  const data = await rpc("eth_call", [{ to: address, data: "0xa0e67e2b" }, "latest"]).catch(() => null);
+  const data = await polygon.rpc("eth_call", [{ to: address, data: "0xa0e67e2b" }, "latest"]).catch(() => null);
   // Réponse : position, longueur, puis les adresses (32 octets chacune)
   if (typeof data !== "string" || data.length < 2 + 64 * 3) return null;
   const n = parseInt(data.slice(2 + 64, 2 + 128), 16);
@@ -225,35 +85,17 @@ async function safeOwner(address) {
   return `0x${data.slice(2 + 128 + 24, 2 + 192)}`.toLowerCase();
 }
 
-// Premiers transferts de dollars reçus par une adresse (du plus ancien au plus récent)
-async function tokenTransfers(address, fromMs, toMs) {
-  if (!ETHERSCAN_KEY) return rpcTransfers(address, fromMs, toMs);
-  const qs = `module=account&action=tokentx&address=${address}&sort=asc&page=1&offset=200`;
-  // Le message d'erreur contient l'adresse appelée : jamais la clé (publiée sinon)
-  const data = await getJSON(`https://api.etherscan.io/v2/api?chainid=137&${qs}&apikey=${ETHERSCAN_KEY}`, 2).catch((err) => {
-    throw new Error(err.message.replace(/apikey=[^&\s]+/gi, "apikey=***"));
-  });
-  if (Array.isArray(data?.result)) return data.result;
-  // « No transactions found » : liste vide ; toute autre réponse est une panne
-  if (/no (token )?transfers|no transactions/i.test(`${data?.message} ${data?.result}`)) return [];
-  throw new Error(String(data?.message ?? "réponse inattendue").replace(/apikey=[^&\s]+/gi, "apikey=***"));
-}
-
-// Ce qu'on sait d'une adresse : contrat ou non, nombre de transactions
-// envoyées (une plateforme en a des centaines de milliers), et son nom
-// public sur l'explorateur Blockscout quand il répond
-async function addressInfo(address) {
-  const [code, nonce, info] = await Promise.all([
-    rpc("eth_getCode", [address, "latest"]).catch(() => null),
-    rpc("eth_getTransactionCount", [address, "latest"]).catch(() => null),
-    getJSON(`${BLOCKSCOUT}/api/v2/addresses/${address}`, 1).catch(() => null),
+// Ce qu'on sait d'une adresse sur une blockchain : contrat ou non, nombre de
+// transactions envoyées (une plateforme en a des centaines de milliers), et
+// son nom public sur l'explorateur Blockscout de Polygon quand il répond
+async function addressInfo(address, chain) {
+  const [contract, txs, info] = await Promise.all([
+    chain.isContract(address),
+    chain.nonce(address),
+    chain === polygon ? getJSON(`${BLOCKSCOUT}/api/v2/addresses/${address}`, 1).catch(() => null) : null,
   ]);
   const tags = [info?.name, ...(info?.public_tags ?? []).map((t) => t.display_name ?? t.label), ...(info?.metadata?.tags ?? []).map((t) => t.name)].filter(Boolean);
-  return {
-    label: tags[0] ?? null,
-    contract: info?.is_contract === true || (typeof code === "string" && code.length > 2),
-    txs: nonce != null ? parseInt(nonce, 16) : null,
-  };
+  return { label: tags[0] ?? null, contract: info?.is_contract === true || contract, txs };
 }
 
 // Compte Polymarket lié à une adresse (pseudo public, wallet de jeu)
@@ -288,39 +130,37 @@ function kindOf(info, pm) {
 
 // ---------- Remonter l'argent ----------
 
-let funders = {}; // adresse -> { at, label, kind, txs, pm, contract }
+let funders = {}; // adresse (ou « chaîne:adresse » hors Polygon) -> { at, label, kind, txs, pm, contract }
+const keyOf = (address, chain = polygon) => (chain === polygon ? address : `${chain.key}:${address}`);
+const infoOf = (address, chain = polygon) => funders[keyOf(address, chain)] ?? {};
 
-async function describe(address) {
-  if (!funders[address]) {
-    const [info, pm] = await Promise.all([addressInfo(address), polymarketProfile(address)]);
-    funders[address] = { at: now, ...info, pm, kind: kindOf(info, pm) };
+async function describe(address, chain = polygon) {
+  const k = keyOf(address, chain);
+  if (!funders[k]) {
+    const [info, pm] = await Promise.all([addressInfo(address, chain), polymarketProfile(address)]);
+    funders[k] = { at: now, ...info, pm, kind: kindOf(info, pm) };
   }
-  return funders[address];
+  return funders[k];
 }
 
-// Qui a envoyé des dollars à `address` entre deux instants : jusqu'à 5
-// Qui a envoyé des dollars (ou des parts de pari) à `address` dans une des
-// fenêtres de temps [début, fin] (ms), essayées dans l'ordre jusqu'à trouver
-// quelque chose : jusqu'à 5 expéditeurs, des plus anciens aux plus récents
-async function fundersOf(address, windows) {
+// Qui a envoyé des dollars (ou, sur Polygon, des parts de pari) à `address`
+// dans une des fenêtres de temps [début, fin] (ms), essayées dans l'ordre
+// jusqu'à trouver quelque chose : jusqu'à 5 expéditeurs, les plus anciens d'abord
+async function fundersOf(address, windows, chain = polygon) {
   for (const [fromMs, toMs] of windows) {
     if (!(toMs > fromMs)) continue;
     const incoming = new Map();
-    const add = (from, amount, ts, tx, via) => {
+    const add = (t, via) => {
+      const from = t.from;
       if (from === address || POLYMARKET_CONTRACTS.has(from) || /^0x0+$/.test(from)) return;
-      if (!incoming.has(from)) incoming.set(from, { address: from, amount: 0, count: 0, first: ts, tx, via });
+      if (!incoming.has(from)) incoming.set(from, { address: from, amount: 0, count: 0, first: t.ts, tx: t.tx, via, chain: chain.key });
       const f = incoming.get(from);
-      f.amount += amount;
+      f.amount += t.amount;
       f.count++;
-      f.first = Math.min(f.first, ts);
+      f.first = Math.min(f.first, t.ts);
     };
-    for (const t of await tokenTransfers(address, fromMs, toMs)) {
-      const ts = Number(t.timeStamp) * 1000;
-      if (lc(t.to) !== address || !USDC.has(lc(t.contractAddress)) || ts < fromMs - 600000 || ts > toMs + 600000) continue;
-      add(lc(t.from), (num(t.value) ?? 0) / 10 ** (num(t.tokenDecimal) ?? 6), ts, t.hash, "dollars");
-    }
-    // Parts de pari reçues directement (lecture directe de la blockchain seulement)
-    if (!ETHERSCAN_KEY) for (const t of await sharesReceived(address, fromMs, toMs)) add(t.from, t.value, t.ts, t.hash, "parts");
+    for (const t of await chain.stableTransfers(address, "in", fromMs, toMs)) add(t, "dollars");
+    if (chain === polygon) for (const t of await sharesReceived(address, fromMs, toMs)) add(t, "parts");
     if (incoming.size)
       return [...incoming.values()]
         .sort((a, b) => a.first - b.first)
@@ -331,9 +171,26 @@ async function fundersOf(address, windows) {
 }
 
 // Le founder : celui qui a envoyé le plus (hors plateformes si possible)
-function pickFounder(list) {
-  const own = list.filter((f) => funders[f.address]?.kind !== "plateforme");
+function pickFounder(list, chain = polygon) {
+  const own = list.filter((f) => infoOf(f.address, chain).kind !== "plateforme");
   return [...(own.length ? own : list)].sort((a, b) => b.amount - a.amount)[0] ?? null;
+}
+
+// Remonte depuis une liste d'expéditeurs : tant que le founder est un simple
+// relais (wallet neuf), on regarde qui l'a financé juste avant
+async function climb(direct, chain, seen, hops = MAX_HOPS) {
+  for (const f of direct) await describe(f.address, chain);
+  const steps = [];
+  let cur = pickFounder(direct, chain);
+  while (cur && !seen.has(`${chain.key}:${cur.address}`)) {
+    seen.add(`${chain.key}:${cur.address}`);
+    steps.push(cur);
+    if (steps.length > hops || infoOf(cur.address, chain).kind !== "relais") break;
+    const up = await fundersOf(cur.address, [[cur.first - 3 * DAY, cur.first + 60000], [cur.first - 14 * DAY, cur.first - 3 * DAY]], chain);
+    for (const f of up) await describe(f.address, chain);
+    cur = pickFounder(up, chain);
+  }
+  return steps;
 }
 
 // Où chercher l'argent d'un wallet : juste avant son premier pari, puis
@@ -346,10 +203,30 @@ function windowsFor(firstTrade, bigBets) {
   ];
 }
 
-// Chaîne founder → … → origine : tant que le founder est un simple relais
-// (wallet neuf), on regarde qui l'a financé juste avant qu'il envoie l'argent.
-// Si rien n'arrive directement au wallet, on cherche du côté de son
-// propriétaire (le wallet qui signe ses ordres).
+// Autres blockchains : quand l'argent arrive sur Polygon par un pont, il part
+// presque toujours de la même adresse sur l'autre blockchain (on transfère
+// ses propres fonds). On lit donc les dépôts de cette même adresse sur
+// Ethereum, Base, Arbitrum et Optimism avant son arrivée sur Polygon.
+async function otherChains(addresses, aroundMs, seen) {
+  for (const address of addresses) {
+    for (const key of OTHER_CHAINS) {
+      const chain = chains[key];
+      const sent = await chain.nonce(address);
+      // Adresse jamais utilisée sur cette blockchain : rien à lire
+      if (!sent) continue;
+      const direct = await fundersOf(address, [[aroundMs - 3 * DAY, aroundMs + HOUR], [aroundMs - 30 * DAY, aroundMs - 3 * DAY]], chain);
+      if (!direct.length) continue;
+      const steps = await climb(direct, chain, seen, 2);
+      if (steps.length) return { chain: key, address, steps };
+    }
+  }
+  return null;
+}
+
+// Chaîne founder → … → origine sur Polygon ; si rien n'arrive directement au
+// wallet, on cherche du côté de son propriétaire (le wallet qui signe ses
+// ordres) ; si la piste s'arrête sur un pont ou une plateforme, on regarde
+// les autres blockchains.
 async function traceWallet(wallet, firstTrade, bigBets) {
   const windows = windowsFor(firstTrade, bigBets);
   const owner = await safeOwner(wallet);
@@ -360,30 +237,76 @@ async function traceWallet(wallet, firstTrade, bigBets) {
     direct = await fundersOf(owner, windows);
     viaOwner = direct.length > 0;
   }
-  for (const f of direct) await describe(f.address);
-  const chain = [];
-  let cur = pickFounder(direct);
-  const seen = new Set([wallet, owner]);
-  while (cur && !seen.has(cur.address)) {
-    seen.add(cur.address);
-    chain.push(cur);
-    if (chain.length > MAX_HOPS || funders[cur.address]?.kind !== "relais") break;
-    const up = await fundersOf(cur.address, [
-      [cur.first - 3 * DAY, cur.first + 60000],
-      [cur.first - 14 * DAY, cur.first - 3 * DAY],
-    ]);
-    for (const f of up) await describe(f.address);
-    cur = pickFounder(up);
+  const seen = new Set([`polygon:${wallet}`, `polygon:${owner}`]);
+  const chain = await climb(direct, polygon, seen);
+  const origin = chain[chain.length - 1];
+  let elsewhere = null;
+  const kind = origin ? infoOf(origin.address).kind : null;
+  if (kind !== "polymarket") {
+    // Adresses qui ont pu faire le pont elles-mêmes : le propriétaire, et le
+    // dernier wallet personnel de la chaîne
+    const candidates = [owner, ...chain.filter((f) => ["relais", "wallet"].includes(infoOf(f.address).kind)).map((f) => f.address)].filter(Boolean);
+    if (candidates.length) elsewhere = await otherChains([...new Set(candidates)].slice(0, 2), origin?.first ?? firstTrade, seen);
   }
-  return { direct, chain, owner, viaOwner };
+  return { direct, chain, owner, viaOwner, elsewhere };
+}
+
+// ---------- Retraits vers une plateforme d'échange ----------
+//
+// Une plateforme donne à chaque client une adresse de dépôt à lui, qui
+// renvoie tout ce qu'elle reçoit vers le grand wallet de la plateforme.
+// Si un wallet suspect retire ses gains vers une adresse de dépôt, tous les
+// autres wallets qui envoient vers cette même adresse alimentent le même
+// compte client : c'est la méthode de « réutilisation d'adresse de dépôt »
+// (Victor, 2020). On ne sait pas qui est le client, seulement quels wallets
+// vont au même compte.
+async function exchangeExits(wallet, owner, sinceMs) {
+  const out = [];
+  const sent = new Map();
+  for (const from of [wallet, owner].filter(Boolean)) {
+    for (const t of await polygon.stableTransfers(from, "out", sinceMs, now)) {
+      if (POLYMARKET_CONTRACTS.has(t.to) || t.to === wallet || t.to === owner) continue;
+      const x = sent.get(t.to) ?? { address: t.to, amount: 0, first: t.ts };
+      x.amount += t.amount;
+      sent.set(t.to, x);
+    }
+  }
+  for (const r of [...sent.values()].sort((a, b) => b.amount - a.amount).slice(0, 3)) {
+    const info = await describe(r.address);
+    if (info.contract || info.kind === "plateforme" || info.kind === "polymarket") continue;
+    // Adresse de dépôt : elle renvoie vite ce qu'elle reçoit vers une plateforme
+    const forwards = (await polygon.stableTransfers(r.address, "out", r.first - HOUR, r.first + 3 * DAY)).filter((t) => t.ts >= r.first - HOUR);
+    let hub = null;
+    for (const t of forwards) {
+      const d = await describe(t.to);
+      if (d.kind === "plateforme") {
+        hub = t.to;
+        break;
+      }
+    }
+    if (!hub) continue;
+    // Les autres wallets qui alimentent ce même compte client
+    const others = new Map();
+    for (const t of await polygon.stableTransfers(r.address, "in", now - 60 * DAY, now)) {
+      if (t.from === wallet || t.from === owner || POLYMARKET_CONTRACTS.has(t.from)) continue;
+      const o = others.get(t.from) ?? { address: t.from, amount: 0, first: t.ts };
+      o.amount += t.amount;
+      others.set(t.from, o);
+    }
+    const list = [...others.values()].sort((a, b) => b.amount - a.amount).slice(0, 8);
+    for (const o of list) await describe(o.address);
+    out.push({ address: r.address, amount: Math.round(r.amount), hub, others: list.map((o) => ({ ...o, amount: Math.round(o.amount) })) });
+  }
+  return out;
 }
 
 // ---------- Programme principal ----------
 
-const summary = (f) => {
+const summary = (f, chain = polygon) => {
   if (!f) return null;
-  const info = funders[f.address] ?? {};
-  return { address: f.address, amount: f.amount, first: f.first, via: f.via ?? null, kind: info.kind ?? "wallet", label: info.label ?? null, txs: info.txs ?? null, pm: info.pm ?? null };
+  const c = f.chain ? chains[f.chain] ?? chain : chain;
+  const info = infoOf(f.address, c);
+  return { address: f.address, chain: c.key, amount: f.amount, first: f.first, via: f.via ?? null, kind: info.kind ?? "wallet", label: info.label ?? null, txs: info.txs ?? null, pm: info.pm ?? null };
 };
 
 async function main(prev) {
@@ -414,15 +337,15 @@ async function main(prev) {
   const all = [...byWallet.values()];
   const isWinner = (x) => x.won > 0 && x.pnl > 0;
 
-  const traced = prev.traced ?? {}; // wallet -> { at, direct, chain, error }
+  const traced = prev.traced ?? {}; // wallet -> { v, at, direct, chain, owner, viaOwner, elsewhere, exits, exitsAt, error }
   funders = prev.funders ?? {};
   for (const [k, v] of Object.entries(funders)) if (now - v.at > FUNDER_TTL) delete funders[k];
 
   // Chaque wallet n'est lu qu'une fois (son financement ne change pas), sauf
-  // ceux lus avant l'ajout des autres chemins (v < 2) ; les gagnants d'abord,
-  // puis les alertes les plus fortes et les plus récentes
+  // ceux lus avant l'ajout des autres blockchains (v < 3) ; les gagnants
+  // d'abord, puis les alertes les plus fortes et les plus récentes
   const todo = all
-    .filter((x) => !traced[x.wallet] || (traced[x.wallet].error && now - traced[x.wallet].at > RETRY) || (traced[x.wallet].v ?? 1) < 2)
+    .filter((x) => !traced[x.wallet] || (traced[x.wallet].error && now - traced[x.wallet].at > RETRY) || (traced[x.wallet].v ?? 1) < 3)
     .sort((a, b) => Number(isWinner(b)) - Number(isWinner(a)) || b.best - a.best || b.last - a.last)
     .slice(0, MAX_WALLETS);
   let failures = 0;
@@ -435,8 +358,8 @@ async function main(prev) {
     try {
       // Les 3 plus grosses mises suspectes : l'argent arrive souvent juste avant
       const bigBets = [...x.bets].sort((a, b) => b.cash - a.cash).slice(0, 3).map((b) => b.ts);
-      const { direct, chain, owner, viaOwner } = await traceWallet(x.wallet, x.firstTrade, bigBets);
-      traced[x.wallet] = { v: 2, at: now, direct, chain, owner, viaOwner };
+      const r = await traceWallet(x.wallet, x.firstTrade, bigBets);
+      traced[x.wallet] = { ...traced[x.wallet], v: 3, at: now, ...r, error: undefined };
       done++;
     } catch (err) {
       failures++;
@@ -444,49 +367,87 @@ async function main(prev) {
       traced[x.wallet] = { ...traced[x.wallet], at: now, error: err.message };
     }
   });
+
+  // Retraits : les wallets gagnants ou très suspects, une fois par jour (les
+  // gains sont retirés après la fin des marchés)
+  const exitTodo = all
+    .filter((x) => traced[x.wallet]?.v >= 3 && (isWinner(x) || x.best >= 70) && (!traced[x.wallet].exitsAt || now - traced[x.wallet].exitsAt > DAY))
+    .sort((a, b) => b.pnl - a.pnl || b.best - a.best)
+    .slice(0, MAX_EXITS);
+  let exitsDone = 0;
+  await mapLimit(exitTodo, 2, async (x) => {
+    if (Date.now() > deadline) return;
+    try {
+      traced[x.wallet].exits = await exchangeExits(x.wallet, traced[x.wallet].owner, x.firstTrade);
+      traced[x.wallet].exitsAt = now;
+      exitsDone++;
+    } catch (err) {
+      lastError = err.message;
+    }
+  });
   // On oublie les wallets qui ne sont plus dans les alertes
   for (const w of Object.keys(traced)) if (!byWallet.has(w)) delete traced[w];
 
-  // Adresses (hors plateformes) qu'on retrouve derrière plusieurs wallets suspects
+  // Adresses (hors plateformes) qu'on retrouve derrière plusieurs wallets
+  // suspects, et adresses de dépôt (même compte d'échange) partagées
   const behind = new Map();
+  const sameAccount = new Map();
   for (const [wallet, t] of Object.entries(traced)) {
     // Le propriétaire (wallet qui signe) compte aussi : deux wallets suspects
     // avec le même propriétaire sont à la même personne
     for (const f of [...(t.direct ?? []), ...(t.chain ?? []), ...(t.owner ? [{ address: t.owner }] : [])]) {
-      if (funders[f.address]?.kind === "plateforme") continue;
+      if (infoOf(f.address).kind === "plateforme") continue;
       if (!behind.has(f.address)) behind.set(f.address, new Set());
       behind.get(f.address).add(wallet);
     }
+    for (const e of t.exits ?? []) {
+      if (!sameAccount.has(e.address)) sameAccount.set(e.address, new Set());
+      sameAccount.get(e.address).add(wallet);
+    }
   }
   const shared = (a) => behind.get(a)?.size ?? 1;
-  const clusters = [...behind.entries()]
-    .filter(([, ws]) => ws.size >= 2)
-    .map(([address, ws]) => ({ ...summary({ address }), wallets: [...ws] }))
-    .sort((a, b) => b.wallets.length - a.wallets.length);
+  const clusters = [
+    ...[...behind.entries()].filter(([, ws]) => ws.size >= 2).map(([address, ws]) => ({ type: "founder", ...summary({ address }), wallets: [...ws] })),
+    ...[...sameAccount.entries()].filter(([, ws]) => ws.size >= 2).map(([address, ws]) => ({ type: "exchange", ...summary({ address }), wallets: [...ws] })),
+  ].sort((a, b) => b.wallets.length - a.wallets.length);
 
   const entry = (x) => {
     const t = traced[x.wallet] ?? {};
     const chain = (t.chain ?? []).map((f) => ({ ...summary(f), shared: shared(f.address) }));
-    const origin = chain[chain.length - 1] ?? null;
-    const main = [...chain].reverse().find((f) => f.kind === "polymarket" && f.pm?.proxy && f.pm.proxy !== x.wallet);
+    const away = t.elsewhere ? t.elsewhere.steps.map((f) => summary(f, chains[t.elsewhere.chain])) : [];
+    const origin = away[away.length - 1] ?? chain[chain.length - 1] ?? null;
+    const main = [...chain, ...away].reverse().find((f) => f.kind === "polymarket" && f.pm?.proxy && f.pm.proxy !== x.wallet);
     const owner = t.owner ? { ...summary({ address: t.owner }), shared: shared(t.owner) } : null;
+    // Retraits vers un compte d'échange, et les autres wallets qui l'alimentent
+    const exits = (t.exits ?? []).map((e) => ({
+      address: e.address,
+      amount: e.amount,
+      hub: summary({ address: e.hub }),
+      suspects: sameAccount.get(e.address)?.size ?? 1,
+      others: e.others.map((o) => summary(o)),
+    }));
     return {
-      founder: chain[0] ?? null,
+      founder: chain[0] ?? away[0] ?? null,
       origin,
-      hops: chain.length,
+      hops: chain.length + away.length,
+      // Wallets neufs qui n'ont servi qu'à faire passer l'argent
+      relays: [...chain, ...away].filter((f) => f.kind === "relais").length,
       via: chain[0]?.via ?? null,
+      bridge: t.elsewhere ? { chain: t.elsewhere.chain, name: CHAINS[t.elsewhere.chain].name, address: t.elsewhere.address } : null,
       owner,
       viaOwner: t.viaOwner === true,
       main: main ? { funder: main.address, ...main.pm } : null,
+      exits,
       error: t.error ?? null,
     };
   };
 
   const view = {
     updatedAt: new Date(now).toISOString(),
-    source: ETHERSCAN_KEY ? "Etherscan" : "serveurs publics Polygon",
+    source: "serveurs publics Polygon, Ethereum, Base, Arbitrum et Optimism",
+    explorers: Object.fromEntries(Object.entries(CHAINS).map(([k, c]) => [k, c.explorer])),
     candidates: all.filter(isWinner).length,
-    // Pour la fiche de chaque alerte : founder et origine de l'argent
+    // Pour la fiche de chaque alerte : founder, origine et retraits
     byWallet: Object.fromEntries(all.filter((x) => traced[x.wallet]).map((x) => [x.wallet, entry(x)])),
     // Détail des wallets récents gagnants
     wallets: all
@@ -495,25 +456,26 @@ async function main(prev) {
       .slice(0, 60)
       .map(({ firstTrade, last, bets, ...x }) => {
         const t = traced[x.wallet];
+        const away = t.elsewhere ? t.elsewhere.steps.map((f) => summary(f, chains[t.elsewhere.chain])) : [];
         return {
           ...x,
           ...entry(x),
-          chain: (t.chain ?? []).map((f) => ({ ...summary(f), shared: shared(f.address) })),
+          chain: [...(t.chain ?? []).map((f) => ({ ...summary(f), shared: shared(f.address) })), ...away],
           funders: (t.direct ?? []).map((f) => ({ ...summary(f), count: f.count, via: f.via, shared: shared(f.address) })),
         };
       }),
     clusters,
   };
-  const withOrigin = Object.values(view.byWallet).filter((e) => e.origin);
-  const relays = Object.values(view.byWallet).filter((e) => e.hops > 1).length;
-  const owners = Object.values(view.byWallet).filter((e) => e.owner).length;
-  const viaOther = Object.values(view.byWallet).filter((e) => e.viaOwner || e.via === "parts").length;
-  const mains = Object.values(view.byWallet).filter((e) => e.main).length;
+  const entries = Object.values(view.byWallet);
+  const count = (fn) => entries.filter(fn).length;
   console.log(
-    `Pistes : ${all.length} wallets récents dans les alertes, ${done} lus ce passage (${failures} en échec via ${view.source}), ${withOrigin.length} founders trouvés, ${relays} passés par un relais, ${viaOther} trouvés par le propriétaire ou des parts, ${owners} propriétaires lus, ${mains} compte principal probable, ${clusters.length} adresse(s) derrière plusieurs suspects`
+    `Pistes : ${all.length} wallets récents dans les alertes, ${done} lus ce passage (${failures} en échec), ${count((e) => e.origin)} founders trouvés, ${count((e) => e.relays > 0)} passés par un relais, ${count((e) => e.viaOwner || e.via === "parts")} par le propriétaire ou des parts, ${count((e) => e.bridge)} venus d'une autre blockchain, ${count((e) => e.main)} compte principal probable`
   );
-  if (failures && !done) console.log(`::warning::Blockchain Polygon illisible : ${lastError}`);
-  else if (failures) console.log(`Exemple d'échec : ${lastError}`);
+  console.log(
+    `Retraits : ${exitsDone} wallets lus, ${count((e) => e.exits.length)} retirent vers une adresse de dépôt d'échange, ${count((e) => e.exits.some((x) => x.others.length))} partagent ce compte avec d'autres wallets · ${clusters.length} groupe(s) de wallets liés`
+  );
+  if (failures && !done) console.log(`::warning::Blockchain illisible : ${lastError}`);
+  else if (lastError) console.log(`Exemple d'échec : ${lastError}`);
   return { state: { traced, funders, at: now }, view };
 }
 
