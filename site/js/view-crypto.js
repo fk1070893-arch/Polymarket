@@ -117,7 +117,7 @@ export function renderCrypto(ctx) {
     return;
   }
   if (!data || !data.markets) {
-    body.innerHTML = `<p class="empty">Le modèle n'est pas encore disponible. Il est recalculé toutes les 15 minutes par la GitHub Action : réessaie un peu plus tard.</p>`;
+    body.innerHTML = `<p class="empty">Le modèle n'est pas encore disponible. Il est recalculé toutes les 5 minutes par la GitHub Action : réessaie un peu plus tard.</p>`;
     return;
   }
 

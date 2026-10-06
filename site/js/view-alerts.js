@@ -154,7 +154,7 @@ export function renderAlerts(ctx) {
     return;
   }
   if (state.alertsError && all.length === 0) {
-    list.innerHTML = `<p class="empty">Les alertes ne sont pas encore disponibles. Elles sont calculées toutes les 15 minutes par la GitHub Action : réessaie un peu plus tard.</p>`;
+    list.innerHTML = `<p class="empty">Les alertes ne sont pas encore disponibles. Elles sont calculées toutes les 5 minutes par la GitHub Action : réessaie un peu plus tard.</p>`;
     return;
   }
 
