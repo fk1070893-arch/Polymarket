@@ -276,6 +276,88 @@ function renderReview(ctx) {
 }
 let bestCache = [];
 
+// ---------- Pistes : d'où vient l'argent des wallets suspects gagnants ----------
+
+const KIND_FR = {
+  polymarket: ["Compte Polymarket", "good"],
+  plateforme: ["Plateforme (échange, pont)", ""],
+  contrat: ["Contrat", ""],
+  wallet: ["Wallet personnel", "alert"],
+};
+const profile = (addr, text) => `<a href="https://polymarket.com/profile/${esc(addr)}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+const scan = (addr) => `<a href="https://polygonscan.com/address/${esc(addr)}" target="_blank" rel="noopener noreferrer">${shortAddress(addr)}</a>`;
+
+function funderLine(f) {
+  const [kind, tone] = KIND_FR[f.kind] ?? KIND_FR.wallet;
+  const who =
+    f.kind === "polymarket" && f.pm
+      ? `${profile(f.pm.proxy, f.pm.name ? `<b>${esc(f.pm.name)}</b>` : shortAddress(f.pm.proxy))} <span class="muted small">(${f.pm.trades >= 500 ? "500+" : f.pm.trades} paris${
+          f.pm.value != null ? `, ${usd0.format(f.pm.value)} en jeu` : ""
+        }${f.pm.since ? `, actif depuis ${timeAgo(f.pm.since).replace("il y a ", "")}` : ""})</span>`
+      : `${f.label ? `<b>${esc(f.label)}</b> ` : ""}${scan(f.address)}`;
+  return `<li><span class="flag ${tone}">${kind}</span> ${who} · a envoyé <b>${usd0.format(f.amount)}</b>${f.count > 1 ? ` en ${f.count} fois` : ""}, ${timeAgo(f.first)}${
+    f.shared > 1 ? ` · <b class="down">a aussi financé ${f.shared - 1} autre${f.shared > 2 ? "s" : ""} wallet${f.shared > 2 ? "s" : ""} suspect${f.shared > 2 ? "s" : ""}</b>` : ""
+  }</li>`;
+}
+
+function renderTrails(ctx) {
+  const box = $("alerts-trails");
+  const data = ctx.state.walletTrails;
+  if (!data?.wallets) {
+    box.innerHTML = "";
+    return;
+  }
+  const withMain = data.wallets.filter((w) => w.main);
+  const clusters = data.clusters ?? [];
+  box.innerHTML = `
+    <section class="verdict trails">
+      <h2>D'où vient l'argent des wallets suspects gagnants ?</h2>
+      <p class="muted small">Wallets de moins de 30 jours dont les alertes ont gagné (${data.candidates ?? data.wallets.length}) : leurs premiers dépôts en dollars, lus sur la blockchain Polygon (publique).
+        Si l'argent vient d'un autre compte Polymarket, c'est sans doute le compte principal de la même personne. Un transfert ne le prouve pas (ça peut être un paiement),
+        et beaucoup viennent d'une plateforme d'échange : piste froide. Mis à jour ${timeAgo(new Date(data.updatedAt).getTime())}.</p>
+      ${
+        clusters.length
+          ? `<h3>Une même adresse derrière plusieurs wallets suspects</h3><ul class="trail-list">${clusters
+              .map(
+                (c) =>
+                  `<li>${c.kind === "polymarket" && c.pm ? profile(c.pm.proxy, c.pm.name ? `<b>${esc(c.pm.name)}</b>` : shortAddress(c.pm.proxy)) : `${c.label ? `<b>${esc(c.label)}</b> ` : ""}${scan(c.address)}`}
+                  a financé <b>${c.wallets.length} wallets suspects</b> : ${c.wallets.map((w) => profile(w, shortAddress(w))).join(", ")}</li>`
+              )
+              .join("")}</ul>`
+          : ""
+      }
+      ${withMain.length ? `<p><b>${withMain.length}</b> compte${withMain.length > 1 ? "s" : ""} principa${withMain.length > 1 ? "ux" : "l"} probable${withMain.length > 1 ? "s" : ""} trouvé${withMain.length > 1 ? "s" : ""}.</p>` : ""}
+      ${
+        data.wallets.length
+          ? `<div class="trail-cards">${data.wallets
+              .slice(0, 20)
+              .map(
+                (w) => `
+            <article class="trail">
+              <header>
+                ${profile(w.wallet, w.name ? `<b>${esc(w.name)}</b>` : `<b>${shortAddress(w.wallet)}</b>`)}
+                <span class="muted small">compte de ${duration(w.age)} · ${w.alerts} alerte${w.alerts > 1 ? "s" : ""} (score max ${w.best}) · ${w.won} gagnée${w.won > 1 ? "s" : ""}, ${w.lost} perdue${
+                  w.lost > 1 ? "s" : ""
+                } · ${usd0.format(w.cash)} misés</span>
+              </header>
+              ${
+                w.main
+                  ? `<p class="trail-main">Compte principal probable : ${profile(w.main.proxy, w.main.name ? `<b>${esc(w.main.name)}</b>` : shortAddress(w.main.proxy))}</p>`
+                  : ""
+              }
+              ${
+                w.funders.length
+                  ? `<ul class="trail-list">${w.funders.map(funderLine).join("")}</ul>`
+                  : `<p class="muted small">${w.error ? `Lecture de la blockchain en échec (${esc(w.error)}) : nouvel essai dans l'heure.` : "Aucun dépôt en dollars trouvé (argent arrivé autrement)."}</p>`
+              }
+            </article>`
+              )
+              .join("")}</div>`
+          : `<p class="muted small">Aucun wallet récent n'a encore d'alerte gagnante sur un marché terminé.</p>`
+      }
+    </section>`;
+}
+
 function moveLine(a, now) {
   if (now == null) return `<span class="muted">Marché clôturé ou hors liste</span>`;
   return `Aujourd'hui : <b>${pct(now)}</b> ${changeBadge(now - a.price) || '<span class="chg">=</span>'}`;
@@ -382,6 +464,7 @@ export function renderAlerts(ctx) {
   const { state } = ctx;
   const list = $("alerts-list");
   renderReview(ctx);
+  renderTrails(ctx);
 
   const all = state.alerts ?? [];
   const counts = Object.fromEntries(GROUPS.map((g) => [g.key, 0]));

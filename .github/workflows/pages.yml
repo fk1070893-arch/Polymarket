@@ -122,6 +122,15 @@ jobs:
         continue-on-error: true
         timeout-minutes: 2
 
+      # D'où vient l'argent des wallets suspects gagnants (une fois par heure)
+      - name: Pistes des wallets suspects
+        run: node scripts/build-wallets.mjs
+        continue-on-error: true
+        timeout-minutes: 4
+        env:
+          PAGES_URL: ${{ steps.pages.outputs.base_url }}
+          ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
+
       - name: Test en direct - marchés tout neufs
         run: node scripts/build-fresh.mjs
         continue-on-error: true

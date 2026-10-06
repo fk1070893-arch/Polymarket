@@ -2433,3 +2433,48 @@ label.check {
   display: grid;
   gap: 4px;
 }
+
+.trails h3 {
+  margin: 16px 0 6px;
+  font-size: 1rem;
+}
+
+.trail-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.trail {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  background: var(--surface);
+  min-width: 0;
+}
+
+.trail header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.trail-main {
+  margin: 8px 0 0;
+}
+
+.trail-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+  font-size: 0.88rem;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .trail-cards {
+    grid-template-columns: 1fr;
+  }
+}

@@ -21,6 +21,7 @@
     "alerts-review": "node scripts/build-alerts-review.mjs",
     "test": "node --test scripts/*.test.mjs",
     "start": "npx --yes serve site",
-    "bots": "node scripts/build-bots.mjs"
+    "bots": "node scripts/build-bots.mjs",
+    "wallets": "node scripts/build-wallets.mjs"
   }
 }

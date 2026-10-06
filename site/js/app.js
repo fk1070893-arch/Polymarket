@@ -63,6 +63,7 @@ const state = {
   alertsUpdatedAt: null,
   alertsError: false,
   alertsReview: null, // bilan des alertes suivies
+  walletTrails: null, // d'où vient l'argent des wallets suspects gagnants
   portfolio: loadPortfolio(),
   strategy: null, // test en direct de la stratégie (null = pas encore chargé, false = indisponible)
   copy: null, // test en direct : copier les alertes
@@ -889,8 +890,13 @@ function mergeCryptoEvents() {
 
 async function refreshAlerts() {
   try {
-    const [{ alerts, updatedAt }, review] = await Promise.all([loadAlerts(), loadData("alerts-review").catch(() => null)]);
+    const [{ alerts, updatedAt }, review, wallets] = await Promise.all([
+      loadAlerts(),
+      loadData("alerts-review").catch(() => null),
+      loadData("wallets").catch(() => null),
+    ]);
     state.alertsReview = review ?? false;
+    state.walletTrails = wallets ?? false;
     state.alerts = alerts;
     state.alertsUpdatedAt = updatedAt;
     state.alertsError = false;
