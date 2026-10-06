@@ -25,8 +25,11 @@ const num = (v) => {
 
 export const STAKE = 100; // mise de référence pour le glissement
 
-// Taux de frais preneur d'un marché (0 sur la plupart des marchés)
+// Taux de frais preneur d'un marché (0 sur la plupart des marchés). Gamma
+// remplit takerBaseFee sur presque tous les marchés, même sans frais : seul
+// feesEnabled dit si les frais s'appliquent vraiment.
 export function feeRate(raw) {
+  if (raw?.feesEnabled !== true && raw?.fees_enabled !== true) return 0;
   const bps = num(raw?.takerBaseFee ?? raw?.taker_base_fee ?? raw?.takerFee);
   return bps != null && bps > 0 ? bps / 10000 : 0;
 }

@@ -52,13 +52,13 @@ async function polymarket(now) {
     for (const raw of ev.markets ?? []) {
       const m = normalizeMarket(raw);
       if (m.closed || !m.active || m.outcomes.length !== 2 || !m.prices.length) continue;
-      out.push({ id: m.id, q: m.question, event: String(ev.id), eventTitle: ev.title ?? "", slug: ev.slug ?? "", outcomes: m.outcomes, p: m.prices[0], bid: raw.bestBid ?? null, ask: raw.bestAsk ?? null, tokens: raw.clobTokenIds ?? null, fee: raw.takerBaseFee ?? null, volume: Math.round(m.volume), end: parseTime(raw.endDate) ?? parseTime(ev.endDate) });
+      out.push({ id: m.id, q: m.question, event: String(ev.id), eventTitle: ev.title ?? "", slug: ev.slug ?? "", outcomes: m.outcomes, p: m.prices[0], bid: raw.bestBid ?? null, ask: raw.bestAsk ?? null, tokens: raw.clobTokenIds ?? null, fee: raw.feesEnabled === true ? raw.takerBaseFee ?? null : null, volume: Math.round(m.volume), end: parseTime(raw.endDate) ?? parseTime(ev.endDate) });
     }
   return out;
 }
 
 // Marché compact -> forme attendue par realCost / feeRate
-const asRaw = (m) => ({ bestBid: m.bid, bestAsk: m.ask, clobTokenIds: m.tokens, takerBaseFee: m.fee });
+const asRaw = (m) => ({ bestBid: m.bid, bestAsk: m.ask, clobTokenIds: m.tokens, takerBaseFee: m.fee, feesEnabled: m.fee != null });
 
 // Prix d'achat de chaque issue sur Polymarket, frais compris (sans glissement)
 function pmAsks(m) {

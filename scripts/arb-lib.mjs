@@ -48,8 +48,9 @@ export function eventPrices(ev) {
       bid: bid != null && bid > 0 && bid < 1 ? bid : null,
       ask: ask != null && ask > 0 && ask < 1 ? ask : null,
       tradable: m.acceptingOrders !== false && m.enableOrderBook !== false,
-      // Frais preneur du marché (0 sur la plupart), en fraction
-      fee: (num(m.takerBaseFee) ?? 0) > 0 ? num(m.takerBaseFee) / 10000 : 0,
+      // Frais preneur du marché (0 sur la plupart), en fraction : seulement
+      // si feesEnabled, Gamma remplit takerBaseFee même sans frais
+      fee: m.feesEnabled === true && (num(m.takerBaseFee) ?? 0) > 0 ? num(m.takerBaseFee) / 10000 : 0,
     };
   });
 

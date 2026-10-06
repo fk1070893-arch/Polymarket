@@ -248,3 +248,11 @@ test("meilleure correspondance dans un index", () => {
   assert.equal(bestMatch(idx, "Will Ethereum reach $5,000 in 2026?"), null);
   assert.equal(bestMatch(idx, "Fed cuts interest rates December 2026", { accept: (x) => x.id !== 1 })?.item.id ?? null, null);
 });
+
+test("frais : comptés seulement si le marché les a activés", async () => {
+  const { feeRate } = await import("./paper.mjs");
+  assert.equal(feeRate({ takerBaseFee: 1000 }), 0);
+  assert.equal(feeRate({ takerBaseFee: 1000, feesEnabled: false }), 0);
+  assert.equal(feeRate({ takerBaseFee: 1000, feesEnabled: true }), 0.1);
+  assert.equal(feeRate({ takerBaseFee: 0, feesEnabled: true }), 0);
+});

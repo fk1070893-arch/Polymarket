@@ -58,7 +58,7 @@ function compactMarkets(events) {
         bid: raw.bestBid ?? null,
         ask: raw.bestAsk ?? null,
         tokens: raw.clobTokenIds ?? null,
-        fee: raw.takerBaseFee ?? null,
+        fee: raw.feesEnabled === true ? raw.takerBaseFee ?? null : null,
         volume: Math.round(m.volume),
         end: parseTime(raw.endDate) ?? parseTime(ev.endDate),
       });

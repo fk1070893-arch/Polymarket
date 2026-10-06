@@ -32,8 +32,15 @@ try {
   }));
   await writeCache("universe.json", { readAt: now, complete: Date.now() < started + 3 * 60000, events: slim });
   const markets = slim.reduce((s, ev) => s + ev.markets.length, 0);
-  const withFee = slim.reduce((s, ev) => s + ev.markets.filter((m) => Number(m.takerBaseFee) > 0).length, 0);
-  console.log(`${slim.length} événements ouverts (${markets} marchés, dont ${withFee} avec frais preneur) lus en ${Math.round((Date.now() - started) / 1000)} s`);
+  const fees = { enabled: 0, rates: {} };
+  for (const ev of slim)
+    for (const m of ev.markets) {
+      if (m.feesEnabled !== true) continue;
+      fees.enabled++;
+      fees.rates[m.takerBaseFee ?? "?"] = (fees.rates[m.takerBaseFee ?? "?"] ?? 0) + 1;
+    }
+  const rates = Object.entries(fees.rates).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([r, n]) => `${r} pb × ${n}`).join(", ");
+  console.log(`${slim.length} événements ouverts (${markets} marchés, dont ${fees.enabled} avec frais activés${rates ? ` : ${rates}` : ""}) lus en ${Math.round((Date.now() - started) / 1000)} s`);
 } catch (err) {
   console.log(`::warning::Lecture de Polymarket en échec : ${err.message} (chaque étape relira l'API)`);
 }
