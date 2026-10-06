@@ -7,6 +7,12 @@
     <meta name="description" content="Consultez les marchés et probabilités de Polymarket, en lecture seule." />
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%232563eb'/><path d='M7 22l6-7 5 4 7-9' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>" />
     <link rel="stylesheet" href="css/style.css" />
+    <!-- Installable sur téléphone comme une application -->
+    <link rel="manifest" href="manifest.webmanifest" />
+    <meta name="theme-color" content="#2563eb" />
+    <link rel="apple-touch-icon" href="icons/icon-192.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Polymarket Viewer" />
     <script type="module" src="js/app.js"></script>
   </head>
   <body>
@@ -23,11 +29,15 @@
       </div>
       <nav class="wrap views" aria-label="Sections">
         <a href="#" data-view="markets" class="view-tab">Marchés</a>
+        <a href="#radar" data-view="radar" class="view-tab">Radar</a>
         <a href="#alertes" data-view="alerts" class="view-tab">Alertes <span class="badge" id="alerts-badge" hidden></span></a>
-        <a href="#crypto" data-view="crypto" class="view-tab">Modèle crypto</a>
         <a href="#strategies" data-view="strategies" class="view-tab">Stratégies</a>
+        <a href="#calendrier" data-view="calendar" class="view-tab">Calendrier</a>
+        <a href="#traders" data-view="traders" class="view-tab">Traders</a>
+        <a href="#crypto" data-view="crypto" class="view-tab">Modèle crypto</a>
         <a href="#backtest" data-view="backtest" class="view-tab">Backtest</a>
         <a href="#portefeuille" data-view="portfolio" class="view-tab">Mon portefeuille</a>
+        <a href="#comprendre" data-view="learn" class="view-tab">Comprendre</a>
       </nav>
     </header>
 
@@ -58,6 +68,90 @@
       <div class="more">
         <button class="btn" id="more" type="button" hidden>Afficher plus</button>
       </div>
+    </main>
+
+    <main class="wrap" id="view-radar" data-view-panel="radar" hidden>
+      <section class="intro">
+        <h1>Radar</h1>
+        <p>
+          Tous les signaux du moment sur une seule page : anomalies de prix, favoris sport trop chers, écarts avec
+          les bookmakers et Kalshi, gros paris suspects… Chacun indique ce que vaut ce type de signal d'après
+          les tests en direct. Les anomalies de prix passent en premier, puis les signaux les plus fiables.
+        </p>
+      </section>
+      <section id="radar-body" aria-live="polite"></section>
+    </main>
+
+    <main class="wrap" id="view-calendar" data-view-panel="calendar" hidden>
+      <section class="intro">
+        <h1>Calendrier</h1>
+        <p>Ce qui se termine dans les 7 prochains jours, et les résultats des dernières 48 heures.</p>
+      </section>
+      <section id="calendar-body" aria-live="polite"></section>
+    </main>
+
+    <main class="wrap" id="view-traders" data-view-panel="traders" hidden>
+      <section class="intro">
+        <h1>Meilleurs traders</h1>
+        <p>
+          Les wallets qui ont le plus gagné sur Polymarket cette semaine et ce mois-ci, et leurs derniers paris.
+          Clique sur « Suivre » pour garder un trader en haut de la liste et voir plus de ses paris.
+        </p>
+      </section>
+      <section id="traders-body" aria-live="polite"></section>
+    </main>
+
+    <main class="wrap" id="view-learn" data-view-panel="learn" hidden>
+      <section class="intro">
+        <h1>Comprendre</h1>
+        <p>Les notions utilisées sur le site, expliquées simplement.</p>
+      </section>
+      <section class="learn">
+        <article>
+          <h2>Prix = probabilité</h2>
+          <p>Sur Polymarket, une part « Oui » rapporte 1 $ si l'événement arrive, 0 sinon. Si elle coûte 30 ¢, le marché estime donc la probabilité à 30 %. Acheter, c'est parier que la vraie probabilité est plus haute que le prix.</p>
+        </article>
+        <article>
+          <h2>Écart achat-vente</h2>
+          <p>Le prix affiché est le milieu entre la meilleure offre d'achat et la meilleure offre de vente. Pour acheter, on paie le prix de vente, un peu plus cher. Sur un petit marché, l'écart peut atteindre 10 ¢ : c'est souvent ce qui mange les gains d'une stratégie. Tous nos tests comptent le prix réellement payé.</p>
+        </article>
+        <article>
+          <h2>Calibration</h2>
+          <p>Un marché est bien calibré si les issues cotées 70 % arrivent environ 70 % du temps. Le backtest vérifie ça sur des milliers de marchés terminés. Si les favoris à 70 % ne gagnent que 60 % du temps, parier contre eux rapporte en moyenne.</p>
+        </article>
+        <article>
+          <h2>Backtest et test en direct</h2>
+          <p>Le backtest rejoue le passé, avec les prix d'avant la fin de chaque marché. Mais on finit toujours par trouver un « biais » si on cherche assez longtemps : c'est pourquoi chaque idée est ensuite testée en direct, sur des marchés que le backtest n'a jamais vus, avec des paris fictifs de 1 $.</p>
+        </article>
+        <article>
+          <h2>Marge d'erreur</h2>
+          <p>L'intervalle entre crochets, par exemple [−5 % ; +30 %], contient 90 % des résultats qu'on aurait pu obtenir avec un peu plus ou un peu moins de chance. S'il contient zéro, le gain peut être dû au hasard. Il faut en général 50 à 100 paris pour qu'il devienne étroit.</p>
+        </article>
+        <article>
+          <h2>Deux moitiés</h2>
+          <p>Le backtest coupe les marchés en deux groupes tirés au sort. Un vrai biais doit apparaître dans les deux ; s'il n'est que dans un seul, c'est probablement de la chance.</p>
+        </article>
+        <article>
+          <h2>Score de Brier</h2>
+          <p>Mesure l'erreur moyenne d'une prévision (0 = parfait). Il sert à comparer deux sources sur les mêmes questions : le modèle crypto contre Polymarket, les bookmakers contre Polymarket.</p>
+        </article>
+        <article>
+          <h2>Prix fantôme</h2>
+          <p>Un prix affiché sans personne pour vendre ou acheter à ce prix : typiquement 50 % par défaut sur un marché tout neuf. Le site le repère en regardant le vrai carnet d'ordres.</p>
+        </article>
+        <article>
+          <h2>Anomalie de prix</h2>
+          <p>Quand une seule issue peut gagner, les « Oui » doivent valoir 100 % au total. S'ils valent moins, acheter toutes les issues rapporte un gain connu d'avance. Ces écarts sont rares, petits, et disparaissent vite.</p>
+        </article>
+        <article>
+          <h2>Paris suspects</h2>
+          <p>Un gros pari d'un wallet tout neuf sur une issue improbable peut venir de quelqu'un d'informé… ou de n'importe qui. Le score résume ces indices ; ce n'est jamais une preuve.</p>
+        </article>
+        <article>
+          <h2>Pourquoi rien n'est garanti</h2>
+          <p>Un biais connu finit souvent par disparaître quand d'autres l'exploitent, et les marchés changent. Depuis la France, parier sur Polymarket n'est de toute façon pas autorisé : le site sert à observer et à apprendre.</p>
+        </article>
+      </section>
     </main>
 
     <main class="wrap" id="view-alerts" data-view-panel="alerts" hidden>

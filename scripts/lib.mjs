@@ -13,7 +13,7 @@ export const DATA_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "sit
 export const STATE_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", ".state");
 
 // Fichiers publiés qui servent aussi de mémoire au passage suivant
-const PERSISTED = new Set(["alerts.json", "arbs.json", "backtest.json", "crypto.json", "markets.json", "odds.json", "notify-state.json"]);
+const PERSISTED = new Set(["alerts.json", "arbs.json", "backtest.json", "crypto.json", "markets.json", "odds.json", "notify-state.json", "leaders.json"]);
 
 async function readStateFile(name) {
   try {

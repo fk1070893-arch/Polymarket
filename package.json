@@ -16,6 +16,8 @@
     "notify": "node scripts/build-notify.mjs",
     "cross": "node scripts/build-cross.mjs",
     "universe": "node scripts/build-universe.mjs",
+    "calendar": "node scripts/build-calendar.mjs",
+    "leaders": "node scripts/build-leaders.mjs",
     "test": "node --test scripts/*.test.mjs",
     "start": "npx --yes serve site"
   }

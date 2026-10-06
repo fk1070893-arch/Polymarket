@@ -3,9 +3,9 @@
 // anomalies de prix. Données : strategy.json, copy.json, odds.json, arbs.json.
 
 import { pnlChart } from "./chart.js";
+import { MIN_BETS, strategyStatus } from "./status.js";
 import { cents, duration, esc, money, pct, timeAgo } from "./format.js";
 
-const MIN_BETS = 50; // en dessous, pas de conclusion
 const $ = (id) => document.getElementById(id);
 
 const sp = (v) => (v == null ? "—" : `${v > 0 ? "+" : ""}${Math.round(v * 100)} %`);
@@ -398,15 +398,8 @@ function crossSection(st) {
 
 // ---------- Tableau de bord ----------
 
-// Statut d'une stratégie, toujours avec un libellé (jamais la couleur seule)
-function status(x) {
-  const n = x?.nExec ?? x?.n ?? 0;
-  if (!n) return { key: "wait", icon: "⏳", label: "Pas encore de résultat" };
-  if (n < MIN_BETS) return { key: "test", icon: "🔬", label: `En test (${n}/${MIN_BETS} paris)` };
-  if (x.ci && x.ci[0] > 0) return { key: "good", icon: "✅", label: "Prometteuse" };
-  if (x.ci && x.ci[1] < 0) return { key: "bad", icon: "❌", label: "Rejetée" };
-  return { key: "test", icon: "➖", label: "Pas de conclusion" };
-}
+// Statut d'une stratégie : voir status.js
+const status = strategyStatus;
 
 function cards(state) {
   const fav = state.strategy?.variants ?? (state.strategy?.summary ? { "24h": state.strategy.summary } : {});

@@ -23,10 +23,27 @@ import { renderPortfolio } from "./view-portfolio.js";
 import { cryptoForMarket, renderCrypto } from "./view-crypto.js";
 import { renderBacktest } from "./view-backtest.js";
 import { renderStrategies } from "./view-strategies.js";
+import { renderRadar } from "./view-radar.js";
+import { renderCalendar } from "./view-calendar.js";
+import { renderTraders } from "./view-traders.js";
+import { marketInsights } from "./view-insights.js";
 
 const PAGE = 24;
 const LIVE_REFRESH_MS = 2 * 60 * 1000;
-const VIEWS = { "": "markets", alertes: "alerts", crypto: "crypto", strategies: "strategies", backtest: "backtest", portefeuille: "portfolio" };
+const VIEWS = {
+  "": "markets",
+  radar: "radar",
+  alertes: "alerts",
+  strategies: "strategies",
+  calendrier: "calendar",
+  traders: "traders",
+  crypto: "crypto",
+  backtest: "backtest",
+  portefeuille: "portfolio",
+  comprendre: "learn",
+};
+// Onglets qui ont besoin des fichiers des tests en direct
+const NEEDS_TESTS = new Set(["strategies", "radar", "portfolio"]);
 
 const state = {
   view: "markets",
@@ -49,6 +66,8 @@ const state = {
   arbs: null, // anomalies de prix
   fresh: null, // test en direct : marchés tout neufs
   cross: null, // Kalshi et Metaculus
+  calendar: null, // fins de marché et résultats récents
+  leaders: null, // classement des traders
   backtest: null, // résultats du backtest (null = pas encore chargé, false = indisponible)
   crypto: null, // modèle crypto (null = pas encore chargé, false = indisponible)
   marketStates: {}, // prix / résultats des marchés hors liste (portefeuille)
@@ -366,6 +385,14 @@ function renderView() {
     renderCrypto(ctx);
   } else if (state.view === "strategies") {
     renderStrategies(ctx);
+  } else if (state.view === "radar") {
+    renderRadar(ctx);
+  } else if (state.view === "calendar") {
+    renderCalendar(ctx);
+  } else if (state.view === "traders") {
+    renderTraders(ctx);
+  } else if (state.view === "learn") {
+    // page statique
   } else if (state.view === "backtest") {
     renderBacktest(ctx);
   } else {
@@ -389,11 +416,13 @@ function onRoute() {
   if (view !== state.view) {
     state.view = view;
     window.scrollTo({ top: 0 });
-    if (view === "strategies" && state.strategy === null) {
-      refreshStrategy().then(() => {
-        if (state.view === "strategies" && !$("detail").open) renderView();
+    const reload = (fn) =>
+      fn().then(() => {
+        if (state.view === view && !$("detail").open) renderView();
       });
-    }
+    if (NEEDS_TESTS.has(view) && state.strategy === null) reload(refreshStrategy);
+    if (view === "calendar" && state.calendar === null) reload(refreshCalendar);
+    if (view === "traders" && state.leaders === null) reload(refreshLeaders);
   }
   if (!slug && $("detail").open) $("detail").close(); // lien vers un onglet depuis une fiche
   renderView();
@@ -529,6 +558,7 @@ function openDetail(id, { keepHash = false, marketId = null, pick = null } = {})
       <p class="chart-note" id="detail-chart-note"></p>
     </section>
     <section class="trade" id="trade"></section>
+    <div id="insights"></div>
     ${
       evAlerts.length
         ? `<section><h3>Paris suspects sur ce marché (${evAlerts.length})</h3>${alertMiniList(ctx, evAlerts.slice(0, 5))}</section>`
@@ -577,8 +607,16 @@ function openDetail(id, { keepHash = false, marketId = null, pick = null } = {})
     updateSummary();
   };
 
+  // Ce que les autres outils du site savent sur le marché choisi
+  const fillInsights = () => {
+    const box = $("insights");
+    if (box) box.innerHTML = marketInsights(state, ev, selected);
+  };
+
   setTitle();
   renderTrade();
+  fillInsights();
+  if (state.strategy === null) refreshStrategy().then(fillInsights);
 
   $("detail-body").oninput = (e) => {
     if (e.target.id === "trade-amount") updateSummary();
@@ -630,6 +668,7 @@ function openDetail(id, { keepHash = false, marketId = null, pick = null } = {})
       $("detail-body").querySelectorAll("[data-market]").forEach((b) => b.classList.toggle("selected", b === row));
       setTitle();
       renderTrade();
+      fillInsights();
       drawHistory(selected, interval);
       $("detail-chart").scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
@@ -772,6 +811,22 @@ async function refreshStrategy() {
   ]);
 }
 
+async function refreshCalendar() {
+  try {
+    state.calendar = await loadData("calendar");
+  } catch {
+    state.calendar ??= false;
+  }
+}
+
+async function refreshLeaders() {
+  try {
+    state.leaders = await loadData("leaders");
+  } catch {
+    state.leaders ??= false;
+  }
+}
+
 async function refreshCrypto() {
   try {
     state.crypto = await loadCrypto();
@@ -819,8 +874,10 @@ async function refresh({ initial = false } = {}) {
       refreshAlerts(),
       refreshCrypto(),
       refreshBacktest(),
-      // Les tests en direct ne sont chargés que si leur onglet est ouvert
-      state.view === "strategies" ? refreshStrategy() : null,
+      // Les données de chaque onglet ne sont chargées que s'il est ouvert
+      NEEDS_TESTS.has(state.view) ? refreshStrategy() : null,
+      state.view === "calendar" ? refreshCalendar() : null,
+      state.view === "traders" ? refreshLeaders() : null,
     ]);
     Object.assign(state, data);
     mergeCryptoEvents();
@@ -856,3 +913,8 @@ refresh({ initial: true });
 setInterval(() => {
   if (!document.hidden && !$("detail").open) refresh();
 }, LIVE_REFRESH_MS);
+
+// Installable sur téléphone et consultable hors connexion (voir sw.js)
+if ("serviceWorker" in navigator && location.protocol === "https:") {
+  navigator.serviceWorker.register("sw.js").catch(() => {});
+}

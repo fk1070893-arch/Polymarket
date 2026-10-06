@@ -77,6 +77,18 @@ jobs:
         continue-on-error: true
         timeout-minutes: 5
 
+      - name: Calendrier (fins de marché et résultats récents)
+        run: node scripts/build-calendar.mjs
+        continue-on-error: true
+        timeout-minutes: 2
+
+      - name: Classement des meilleurs traders
+        run: node scripts/build-leaders.mjs
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          PAGES_URL: ${{ steps.pages.outputs.base_url }}
+
       - name: Détecter les paris suspects
         run: node scripts/build-alerts.mjs
         continue-on-error: true
@@ -179,6 +191,7 @@ jobs:
           v="${GITHUB_SHA::7}"
           sed -i -E "s#(from \"\./[a-z-]+\.js)\"#\1?v=$v\"#g" site/js/*.js
           sed -i -E "s#(src=\"js/app\.js)\"#\1?v=$v\"#; s#(href=\"css/style\.css)\"#\1?v=$v\"#" site/index.html
+          sed -i "s/const VERSION = \"dev\";/const VERSION = \"$v\";/" site/sw.js
 
       - uses: actions/upload-pages-artifact@v3
         with:

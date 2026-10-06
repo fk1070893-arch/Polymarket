@@ -10,7 +10,7 @@ import { allEventsBetween, writeCache } from "./lib.mjs";
 
 const DAY = 86400000;
 
-const EVENT_FIELDS = ["id", "slug", "title", "endDate", "startDate", "startTime", "createdAt", "negRisk", "enableNegRisk", "negRiskAugmented", "volume24hr"];
+const EVENT_FIELDS = ["id", "slug", "title", "image", "icon", "endDate", "startDate", "startTime", "createdAt", "negRisk", "enableNegRisk", "negRiskAugmented", "volume", "volume24hr", "liquidity"];
 const MARKET_FIELDS = [
   "id", "question", "conditionId", "groupItemTitle", "outcomes", "outcomePrices", "clobTokenIds", "bestBid", "bestAsk",
   "volumeNum", "volume", "endDate", "startDate", "createdAt", "closed", "active", "acceptingOrders", "enableOrderBook",

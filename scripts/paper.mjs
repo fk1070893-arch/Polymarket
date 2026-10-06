@@ -123,6 +123,14 @@ export function paperStats(bets, { seed = 5 } = {}) {
   };
 }
 
+// Paris en attente, par marché, pour la fiche d'un marché sur le site :
+// { marketId: [issue achetée, prix payé, date du pari] }
+export function openByMarket(bets) {
+  const out = {};
+  for (const b of bets) if (b.won == null && (b.marketId ?? b.id)) out[b.marketId ?? String(b.id).split(":")[0]] = [b.side, b.cost ?? null, b.placedAt];
+  return out;
+}
+
 // Courbe des gains cumulés (1 $ par pari, au prix payé), dans l'ordre des
 // règlements, réduite à `max` points : [[date, gain cumulé, paris], …]
 export function pnlCurve(bets, max = 120) {

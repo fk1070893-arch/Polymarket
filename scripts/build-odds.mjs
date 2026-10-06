@@ -18,7 +18,7 @@ import { normalizeMarket } from "../site/js/normalize.js";
 import { groupOf, parseTime } from "./backtest-lib.mjs";
 import { allEventsBetween, loadState, universeEvents, writeState } from "./lib.mjs";
 import { gameProbs, marketTargets, sameGame, sideProbs } from "./odds-lib.mjs";
-import { askPrices, paperStats, pnlCurve, settleBets } from "./paper.mjs";
+import { askPrices, paperStats, pnlCurve, settleBets, openByMarket } from "./paper.mjs";
 
 const ODDS = "https://api.the-odds-api.com/v4";
 // Un espace ou un retour à la ligne collé avec la clé la ferait refuser
@@ -283,7 +283,7 @@ async function main(prev) {
     bookByMarket,
     summary,
   };
-  return { state: { ...base, bets, track, state }, view: { ...base, bets: bets.slice(0, 30) } };
+  return { state: { ...base, bets, track, state }, view: { ...base, bets: bets.slice(0, 30), open: openByMarket(bets) } };
 }
 
 const prev = await loadState("odds");

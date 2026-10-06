@@ -2,6 +2,7 @@
 
 import { cents, esc, money, pct, shortDateFmt, signedMoney, translateOutcome } from "./format.js";
 import { START_CASH, exportPortfolio, importPortfolio, resetPortfolio, sell, stats } from "./portfolio.js";
+import { strategySummaries } from "./status.js";
 
 const $ = (id) => document.getElementById(id);
 let bound = false;
@@ -125,6 +126,37 @@ function bind(ctx) {
   });
 }
 
+// Tes prédictions comparées aux stratégies testées en direct : gain moyen
+// pour 1 $ misé, de part et d'autre
+function versusStrategies(ctx, p) {
+  const done = p.positions.filter((x) => x.status === "won" || x.status === "lost");
+  const staked = done.reduce((t, x) => t + x.stake, 0);
+  const mine = staked ? done.reduce((t, x) => t + (x.status === "won" ? x.shares - x.stake : -x.stake), 0) / staked : null;
+  const sums = Object.values(strategySummaries(ctx.state)).filter((x) => x.s?.n);
+  if (ctx.state.strategy === null) return `<p class="muted small">Chargement des stratégies…</p>`;
+  const sp = (v) => (v == null ? "—" : `${v > 0 ? "+" : ""}${Math.round(v * 100)} %`);
+  const rows = [
+    { name: "<b>Toi</b>", n: done.length, roi: mine },
+    ...sums.map((x) => ({ name: esc(x.name), n: x.s.n, roi: x.s.roi })),
+  ].sort((a, b) => (b.roi ?? -9) - (a.roi ?? -9));
+  return `
+    <section class="verdict">
+      <h2>Toi contre les stratégies automatiques</h2>
+      <p>Gain moyen pour 1 $ misé, sur les paris terminés. Les stratégies parient 1 $ fictif à chaque signal, au prix réellement payé.</p>
+      ${
+        done.length
+          ? `<div class="table-wrap"><table class="bt-table">
+              <thead><tr><th>Qui</th><th class="num">Paris terminés</th><th class="num">Gain pour 1 $</th></tr></thead>
+              <tbody>${rows
+                .map((r) => `<tr class="${r.n < 20 ? "thin" : ""}"><td>${r.name}</td><td class="num">${r.n}</td><td class="num ${r.roi == null ? "" : r.roi >= 0 ? "up" : "down"}">${sp(r.roi)}</td></tr>`)
+                .join("")}</tbody>
+            </table></div>
+            <p class="muted small">Lignes grisées : moins de 20 paris terminés, le hasard domine encore.</p>`
+          : `<p class="empty-inline">Aucune de tes prédictions n'est encore terminée : la comparaison apparaîtra dès la première.</p>`
+      }
+    </section>`;
+}
+
 export function renderPortfolio(ctx) {
   bind(ctx);
   const { state } = ctx;
@@ -148,6 +180,8 @@ export function renderPortfolio(ctx) {
       <h2>Est-ce que tu bats le marché ?</h2>
       ${verdict(s)}
     </section>
+
+    ${versusStrategies(ctx, p)}
 
     <section>
       <h2>Prédictions en cours (${open.length})</h2>

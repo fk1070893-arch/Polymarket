@@ -120,6 +120,17 @@ Le site est ensuite disponible sur `https://<ton-pseudo>.github.io/Polymarket/` 
 
 > GitHub Pages est gratuit pour les dépôts **publics**. Pour un dépôt privé, il faut un compte GitHub Pro.
 
+## Autres onglets
+
+- **Radar** : tous les signaux du moment sur une seule page (anomalies de prix, favoris sport à bon prix, écarts avec les bookmakers et Kalshi, paris suspects, marchés neufs à vrai prix, modèle crypto), chacun avec le statut de sa stratégie d'après les tests en direct.
+- **Fiche d'un marché** : un bloc « Ce que le site sait sur ce marché » réunit les cotes des bookmakers, le prix Kalshi, le modèle crypto, une éventuelle anomalie et les paris fictifs en cours des tests.
+- **Calendrier** (`scripts/build-calendar.mjs`) : les événements les plus suivis qui se terminent dans les 7 jours, et les résultats des dernières 48 h.
+- **Traders** (`scripts/build-leaders.mjs`) : les wallets les plus rentables de la semaine et du mois, leurs derniers paris ; « Suivre » garde un trader en haut de la liste (choix enregistré dans le navigateur). Mis à jour une fois par heure.
+- **Mon portefeuille** : tes prédictions comparées aux stratégies automatiques (gain pour 1 $ misé).
+- **Comprendre** : les notions du site expliquées simplement.
+
+**Sur téléphone**, le site s'installe comme une application (menu du navigateur → « Ajouter à l'écran d'accueil ») et reste consultable hors connexion avec les dernières données chargées (`site/sw.js`, `site/manifest.webmanifest`).
+
 ## Fiabilité
 
 - **Un seul passage à la fois** (manuel ou automatique) : deux passages simultanés reliraient la même mémoire et le second effacerait les paris du premier.

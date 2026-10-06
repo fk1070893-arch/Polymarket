@@ -20,7 +20,7 @@ import { normalizeMarket } from "../site/js/normalize.js";
 import { parseTime } from "./backtest-lib.mjs";
 import { allEventsBetween, getJSON, loadState, readCache, writeState } from "./lib.mjs";
 import { bestMatch, buildIndex } from "./match-lib.mjs";
-import { paperStats, pnlCurve, settleBets } from "./paper.mjs";
+import { paperStats, pnlCurve, settleBets, openByMarket } from "./paper.mjs";
 
 const KALSHI = "https://api.elections.kalshi.com/trade-api/v2";
 const DAY = 86400000;
@@ -325,12 +325,14 @@ async function main(prev) {
     kalshiMarkets: kalshi.length,
     pairs: pairs.sort(byGap).slice(0, 60),
     pairCount: pairs.length,
+    // Toutes les paires (pas seulement les plus gros écarts), pour la fiche d'un marché
+    kalshiByMarket: Object.fromEntries(pairs.map((p) => [p.marketId, [Math.round(p.kalshi.mid * 1000) / 1000, p.kalshi.ticker, p.sim]])),
     arbs: arbs.sort((a, b) => b.profit - a.profit).slice(0, 30),
     metaculus: metaPairs.sort(byGap).slice(0, 40),
     metaculusCount: metaPairs.length,
     summary: { ...paperStats(settled), pending: bets.length - settled.length, curve: pnlCurve(settled) },
   };
-  return { state: { ...base, bets }, view: { ...base, bets: bets.slice(0, 30) } };
+  return { state: { ...base, bets }, view: { ...base, bets: bets.slice(0, 30), open: openByMarket(bets) } };
 }
 
 const prev = await loadState("cross");

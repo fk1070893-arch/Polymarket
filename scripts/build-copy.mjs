@@ -12,7 +12,7 @@
 import { normalizeMarket } from "../site/js/normalize.js";
 import { parseTime } from "./backtest-lib.mjs";
 import { loadState, readData, writeState } from "./lib.mjs";
-import { askPrices, fetchMarketsByCondition, paperStats, pnlCurve, roiAt, settleBets } from "./paper.mjs";
+import { askPrices, fetchMarketsByCondition, paperStats, pnlCurve, roiAt, settleBets, openByMarket } from "./paper.mjs";
 
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
@@ -113,7 +113,7 @@ async function main(prev, alerts) {
     rule: RULE,
     summary,
   };
-  return { state: { ...base, bets }, view: { ...base, bets: bets.slice(0, 30) } };
+  return { state: { ...base, bets }, view: { ...base, bets: bets.slice(0, 30), open: openByMarket(bets) } };
 }
 
 const prev = await loadState("copy");

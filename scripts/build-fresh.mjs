@@ -14,7 +14,7 @@ import { GAMMA } from "../site/js/api.js";
 import { normalizeMarket } from "../site/js/normalize.js";
 import { parseTime } from "./backtest-lib.mjs";
 import { getJSON, loadState, universeEvents, writeState } from "./lib.mjs";
-import { askPrices, paperStats, pnlCurve, settleBets, spreadOf } from "./paper.mjs";
+import { askPrices, paperStats, pnlCurve, settleBets, spreadOf, openByMarket } from "./paper.mjs";
 
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
@@ -203,7 +203,7 @@ async function main(prev) {
     rule: RULE,
     summary,
   };
-  return { state: { ...base, bets, counts, seenIds }, view: { ...base, bets: bets.slice(0, 30) } };
+  return { state: { ...base, bets, counts, seenIds }, view: { ...base, bets: bets.slice(0, 30), open: openByMarket(bets) } };
 }
 
 const prev = await loadState("fresh");
