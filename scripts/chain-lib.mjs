@@ -24,7 +24,13 @@ export const CHAINS = {
       "https://polygon.llamarpc.com",
       "https://polygon-mainnet.public.blastapi.io",
     ],
-    stables: ["0x2791bca1f2de4661ed88a30c99a7a9449aa84174", "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", "0xc2132d05d31c914a87c6611c10748aeb04b58e8f"],
+    // USDC.e, USDC, USDT, et pUSD (monnaie de Polymarket depuis le 28 avril 2026)
+    stables: [
+      "0x2791bca1f2de4661ed88a30c99a7a9449aa84174",
+      "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
+      "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
+      "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+    ],
   },
   ethereum: {
     name: "Ethereum",
@@ -195,5 +201,14 @@ export function makeChain(key) {
     return typeof code === "string" && code.length > 2;
   }
 
-  return { key, ...cfg, rpc, latestBlock, blockAt, tsOf, scanLogs, stableTransfers, nonce, isContract };
+  // Transferts de dollars d'une transaction précise (pour voir ce qui se
+  // passe derrière un dépôt ou un retrait de pUSD)
+  async function txTransfers(hash) {
+    const r = await rpc("eth_getTransactionReceipt", [hash]).catch(() => null);
+    return (r?.logs ?? [])
+      .filter((l) => l.topics?.[0] === TRANSFER && l.topics.length === 3 && cfg.stables.includes(l.address.toLowerCase()))
+      .map((l) => ({ from: addrOf(l.topics[1]), to: addrOf(l.topics[2]), amount: Number(BigInt(l.data)) / 1e6, token: l.address.toLowerCase() }));
+  }
+
+  return { key, ...cfg, rpc, latestBlock, blockAt, tsOf, scanLogs, stableTransfers, txTransfers, nonce, isContract };
 }

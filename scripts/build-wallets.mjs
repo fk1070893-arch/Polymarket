@@ -35,11 +35,28 @@ const BLOCKSCOUT = "https://polygon.blockscout.com";
 // Contrats de Polymarket : l'argent qu'ils envoient vient des paris (ventes,
 // gains), pas d'un dépôt
 const POLYMARKET_CONTRACTS = new Set([
-  "0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e", // CTF Exchange
-  "0xc5d563a36ae78145c45a50134d48a1215220f80a", // NegRisk CTF Exchange
-  "0xd91e80cf2e7be2e162c6513ced06f1dd0da35296", // NegRisk Adapter
+  "0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e", // CTF Exchange (V1)
+  "0xc5d563a36ae78145c45a50134d48a1215220f80a", // NegRisk CTF Exchange (V1)
+  "0xd91e80cf2e7be2e162c6513ced06f1dd0da35296", // NegRisk Adapter (V1)
   "0x4d97dcd97ec945f40cf65f87097ace5ea0476045", // Conditional Tokens
+  // Version 2, en service depuis le 28 avril 2026 (github.com/Polymarket/ctf-exchange-v2)
+  "0xe111180000d2663c0091e4f400237545b87b996b", // CTF Exchange V2
+  "0xe2222d279d744050d28e00520010520000310f59", // NegRisk CTF Exchange V2
+  "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb", // pUSD (CollateralToken)
+  "0x93070a847efef7f70739046a929d47a521f5b8ee", // CollateralOnramp
+  "0x2957922eb93258b93368531d39facca3b4dc5854", // CollateralOfframp
+  "0xebc2459ec962869ca4c0bd1e06368272732bcb08", // PermissionedRamp
+  "0xada100874d00e3331d00f2007a9c336a65009718", // CtfCollateralAdapter
+  "0xada200001000ef00d07553cee7006808f895c6f1", // NegRiskCtfCollateralAdapter
+  "0xc417fd8e9661c0d2120b64a04bb3278c17e99db1", // coffre qui garde les USDC.e derrière les pUSD
+  "0xada2005600dec949baf300f4c6120000bdb6eaab", // contrat V2 vu livrant des parts à plusieurs comptes
 ]);
+const PUSD = "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb";
+// Un contrat qui « envoie » à au moins ce nombre de wallets suspects
+// différents est un rouage de Polymarket ou d'un service, pas un founder
+const INFRA_MIN_WALLETS = 5;
+let infra = new Set();
+const ignored = (a) => POLYMARKET_CONTRACTS.has(a) || infra.has(a) || /^0x0+$/.test(a);
 
 const num = (v) => {
   const n = typeof v === "string" ? parseFloat(v) : v;
@@ -66,7 +83,7 @@ async function sharesReceived(address, fromMs, toMs) {
     const operator = addrOf(l.topics[1]);
     const from = addrOf(l.topics[2]);
     // Envoyées par leur propriétaire lui-même, pas par un contrat d'échange
-    if (operator !== from || /^0x0+$/.test(from) || POLYMARKET_CONTRACTS.has(operator)) continue;
+    if (operator !== from || ignored(from) || ignored(operator)) continue;
     // Quantité : 2e mot des données pour TransferSingle (id, valeur), en parts de 1 $
     const value = l.topics[0] === TRANSFER_SINGLE ? Number(BigInt(`0x${l.data.slice(66, 130)}`)) / 1e6 : 0;
     out.push({ from, amount: value, ts: (await polygon.tsOf(l.blockNumber)) * 1000, tx: l.transactionHash });
@@ -152,15 +169,32 @@ async function fundersOf(address, windows, chain = polygon) {
     const incoming = new Map();
     const add = (t, via) => {
       const from = t.from;
-      if (from === address || POLYMARKET_CONTRACTS.has(from) || /^0x0+$/.test(from)) return;
+      if (from === address || ignored(from)) return;
       if (!incoming.has(from)) incoming.set(from, { address: from, amount: 0, count: 0, first: t.ts, tx: t.tx, via, chain: chain.key });
       const f = incoming.get(from);
       f.amount += t.amount;
       f.count++;
       f.first = Math.min(f.first, t.ts);
     };
-    for (const t of await chain.stableTransfers(address, "in", fromMs, toMs)) add(t, "dollars");
+    for (const t of await chain.stableTransfers(address, "in", fromMs, toMs)) {
+      // pUSD créés pour ce wallet (dépôt chez Polymarket) : le vrai expéditeur
+      // est celui qui a versé les USDC.e dans la même transaction
+      if (t.token === PUSD && ignored(t.from)) {
+        for (const u of await chain.txTransfers(t.tx)) {
+          if (u.token !== PUSD && POLYMARKET_CONTRACTS.has(u.to) && !ignored(u.from) && u.from !== address) add({ ...t, from: u.from, amount: u.amount }, "dollars");
+        }
+        continue;
+      }
+      add(t, "dollars");
+    }
     if (chain === polygon) for (const t of await sharesReceived(address, fromMs, toMs)) add(t, "parts");
+    // Parts venues d'un contrat qui n'est pas un compte Polymarket : un rouage
+    // de Polymarket (adaptateur, échange…), pas une personne
+    for (const f of [...incoming.values()]) {
+      if (f.via !== "parts") continue;
+      const info = await describe(f.address, chain);
+      if (info.contract && !info.pm) incoming.delete(f.address);
+    }
     if (incoming.size)
       return [...incoming.values()]
         .sort((a, b) => a.first - b.first)
@@ -265,10 +299,20 @@ async function exchangeExits(wallet, owner, sinceMs) {
   const sent = new Map();
   for (const from of [wallet, owner].filter(Boolean)) {
     for (const t of await polygon.stableTransfers(from, "out", sinceMs, now)) {
-      if (POLYMARKET_CONTRACTS.has(t.to) || t.to === wallet || t.to === owner) continue;
-      const x = sent.get(t.to) ?? { address: t.to, amount: 0, first: t.ts };
-      x.amount += t.amount;
-      sent.set(t.to, x);
+      let to = t.to;
+      let amount = t.amount;
+      // Retrait de pUSD : Polymarket rend des USDC.e au destinataire choisi
+      // dans la même transaction, c'est lui qu'on suit
+      if (t.token === PUSD && ignored(to)) {
+        const u = (await polygon.txTransfers(t.tx)).find((x) => x.token !== PUSD && POLYMARKET_CONTRACTS.has(x.from) && !ignored(x.to));
+        if (!u) continue;
+        to = u.to;
+        amount = u.amount;
+      }
+      if (ignored(to) || to === wallet || to === owner) continue;
+      const x = sent.get(to) ?? { address: to, amount: 0, first: t.ts };
+      x.amount += amount;
+      sent.set(to, x);
     }
   }
   for (const r of [...sent.values()].sort((a, b) => b.amount - a.amount).slice(0, 3)) {
@@ -288,7 +332,7 @@ async function exchangeExits(wallet, owner, sinceMs) {
     // Les autres wallets qui alimentent ce même compte client
     const others = new Map();
     for (const t of await polygon.stableTransfers(r.address, "in", now - 60 * DAY, now)) {
-      if (t.from === wallet || t.from === owner || POLYMARKET_CONTRACTS.has(t.from)) continue;
+      if (t.from === wallet || t.from === owner || ignored(t.from)) continue;
       const o = others.get(t.from) ?? { address: t.from, amount: 0, first: t.ts };
       o.amount += t.amount;
       others.set(t.from, o);
@@ -340,12 +384,20 @@ async function main(prev) {
   const traced = prev.traced ?? {}; // wallet -> { v, at, direct, chain, owner, viaOwner, elsewhere, exits, exitsAt, error }
   funders = prev.funders ?? {};
   for (const [k, v] of Object.entries(funders)) if (now - v.at > FUNDER_TTL) delete funders[k];
+  // Rouages : contrats sans compte Polymarket qui « envoient » à beaucoup de
+  // wallets suspects différents (échange, coffre, adaptateur…)
+  const senders = new Map();
+  for (const [w, t] of Object.entries(traced)) for (const f of t.direct ?? []) {
+    if (!senders.has(f.address)) senders.set(f.address, new Set());
+    senders.get(f.address).add(w);
+  }
+  infra = new Set([...(prev.infra ?? []), ...[...senders].filter(([a, ws]) => ws.size >= INFRA_MIN_WALLETS && funders[a]?.contract && !funders[a]?.pm).map(([a]) => a)]);
 
   // Chaque wallet n'est lu qu'une fois (son financement ne change pas), sauf
   // ceux lus avant l'ajout des autres blockchains (v < 3) ; les gagnants
   // d'abord, puis les alertes les plus fortes et les plus récentes
   const todo = all
-    .filter((x) => !traced[x.wallet] || (traced[x.wallet].error && now - traced[x.wallet].at > RETRY) || (traced[x.wallet].v ?? 1) < 3)
+    .filter((x) => !traced[x.wallet] || (traced[x.wallet].error && now - traced[x.wallet].at > RETRY) || (traced[x.wallet].v ?? 1) < 4)
     .sort((a, b) => Number(isWinner(b)) - Number(isWinner(a)) || b.best - a.best || b.last - a.last)
     .slice(0, MAX_WALLETS);
   let failures = 0;
@@ -359,7 +411,8 @@ async function main(prev) {
       // Les 3 plus grosses mises suspectes : l'argent arrive souvent juste avant
       const bigBets = [...x.bets].sort((a, b) => b.cash - a.cash).slice(0, 3).map((b) => b.ts);
       const r = await traceWallet(x.wallet, x.firstTrade, bigBets);
-      traced[x.wallet] = { ...traced[x.wallet], v: 3, at: now, ...r, error: undefined };
+      // v4 : contrats de Polymarket V2 et pUSD pris en compte
+      traced[x.wallet] = { ...traced[x.wallet], v: 4, at: now, ...r, error: undefined };
       done++;
     } catch (err) {
       failures++;
@@ -371,7 +424,7 @@ async function main(prev) {
   // Retraits : les wallets gagnants ou très suspects, une fois par jour (les
   // gains sont retirés après la fin des marchés)
   const exitTodo = all
-    .filter((x) => traced[x.wallet]?.v >= 3 && (isWinner(x) || x.best >= 70) && (!traced[x.wallet].exitsAt || now - traced[x.wallet].exitsAt > DAY))
+    .filter((x) => traced[x.wallet]?.v >= 4 && (isWinner(x) || x.best >= 70) && (!traced[x.wallet].exitsAt || now - traced[x.wallet].exitsAt > DAY))
     .sort((a, b) => b.pnl - a.pnl || b.best - a.best)
     .slice(0, MAX_EXITS);
   let exitsDone = 0;
@@ -396,7 +449,7 @@ async function main(prev) {
     // Le propriétaire (wallet qui signe) compte aussi : deux wallets suspects
     // avec le même propriétaire sont à la même personne
     for (const f of [...(t.direct ?? []), ...(t.chain ?? []), ...(t.owner ? [{ address: t.owner }] : [])]) {
-      if (infoOf(f.address).kind === "plateforme") continue;
+      if (infoOf(f.address).kind === "plateforme" || ignored(f.address)) continue;
       if (!behind.has(f.address)) behind.set(f.address, new Set());
       behind.get(f.address).add(wallet);
     }
@@ -413,7 +466,8 @@ async function main(prev) {
 
   const entry = (x) => {
     const t = traced[x.wallet] ?? {};
-    const chain = (t.chain ?? []).map((f) => ({ ...summary(f), shared: shared(f.address) }));
+    // Lectures anciennes (avant la v4) : on masque les rouages de Polymarket
+    const chain = (t.chain ?? []).filter((f) => !ignored(f.address)).map((f) => ({ ...summary(f), shared: shared(f.address) }));
     const away = t.elsewhere ? t.elsewhere.steps.map((f) => summary(f, chains[t.elsewhere.chain])) : [];
     const origin = away[away.length - 1] ?? chain[chain.length - 1] ?? null;
     const main = [...chain, ...away].reverse().find((f) => f.kind === "polymarket" && f.pm?.proxy && f.pm.proxy !== x.wallet);
@@ -460,8 +514,8 @@ async function main(prev) {
         return {
           ...x,
           ...entry(x),
-          chain: [...(t.chain ?? []).map((f) => ({ ...summary(f), shared: shared(f.address) })), ...away],
-          funders: (t.direct ?? []).map((f) => ({ ...summary(f), count: f.count, via: f.via, shared: shared(f.address) })),
+          chain: [...(t.chain ?? []).filter((f) => !ignored(f.address)).map((f) => ({ ...summary(f), shared: shared(f.address) })), ...away],
+          funders: (t.direct ?? []).filter((f) => !ignored(f.address)).map((f) => ({ ...summary(f), count: f.count, via: f.via, shared: shared(f.address) })),
         };
       }),
     clusters,
@@ -476,7 +530,8 @@ async function main(prev) {
   );
   if (failures && !done) console.log(`::warning::Blockchain illisible : ${lastError}`);
   else if (lastError) console.log(`Exemple d'échec : ${lastError}`);
-  return { state: { traced, funders, at: now }, view };
+  console.log(`Rouages ignorés (contrats qui envoient à ${INFRA_MIN_WALLETS}+ wallets suspects) : ${[...infra].join(", ") || "aucun"}`);
+  return { state: { traced, funders, infra: [...infra], at: now }, view };
 }
 
 const prev = (await loadState("wallets")) ?? {};
